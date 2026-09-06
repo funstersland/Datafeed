@@ -27,6 +27,18 @@ npm run dev
 
 Open `http://localhost:3847`.
 
+## Deploy on Railway
+
+```bash
+npm install -g @railway/cli
+railway login
+railway init --name datafeed
+railway up
+railway domain
+```
+
+Railway sets `PORT` automatically. Persist SQLite by mounting a volume at `/data` and setting `DATAFEED_DB=/data/datafeed.sqlite`.
+
 ## Data sources (Polymarket only)
 
 - `wss://ws-live-data.polymarket.com` — live TWAP

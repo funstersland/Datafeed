@@ -76,3 +76,5 @@ export const POLYMARKET = {
 
 export const DB_PATH = process.env.DATAFEED_DB ?? "data/datafeed.sqlite";
 export const PORT = Number(process.env.PORT ?? 3847);
+/** Railway and containers require 0.0.0.0; local agent browser can use :: */
+export const HOST = process.env.HOST ?? "0.0.0.0";

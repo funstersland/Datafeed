@@ -9,6 +9,7 @@ import {
   CandleEngine,
 } from "../candles/engine.js";
 import {
+  HOST,
   PAIRS,
   PORT,
   WINDOWS,
@@ -21,6 +22,7 @@ import {
   getDb,
   getStats,
   type CandleRow,
+  type MarketMetaRow,
 } from "../db.js";
 import {
   seedShortWindowHistory,
@@ -32,11 +34,13 @@ import { PolymarketTwapFeed } from "../polymarket/rtds.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "../../public");
 
+type PublicMarketMeta = Omit<MarketMetaRow, "rawJson">;
+
 type ClientMsg =
   | { type: "hello"; status: string; stats: ReturnType<typeof getStats> }
   | { type: "status"; status: string }
   | { type: "candle"; candle: CandleRow }
-  | { type: "meta"; meta: ReturnType<typeof getAllMarketMeta> };
+  | { type: "meta"; meta: PublicMarketMeta[] };
 
 function isPair(v: string): v is Pair {
   return (PAIRS as readonly string[]).includes(v);
@@ -182,9 +186,9 @@ async function main(): Promise<void> {
   // Live TWAP first — never wait on historical seed to start capturing.
   feed.start();
 
-  // Bind :: so both IPv6 localhost and IPv4 (127.0.0.1) work in the agent browser.
-  server.listen({ port: PORT, host: "::", ipv6Only: false }, () => {
-    console.log(`[datafeed] listening on http://127.0.0.1:${PORT} (and [::1]:${PORT})`);
+  // HOST=0.0.0.0 for Railway/containers; override with HOST=:: for local IPv6 localhost.
+  server.listen({ port: PORT, host: HOST, ipv6Only: false }, () => {
+    console.log(`[datafeed] listening on http://${HOST}:${PORT}`);
   });
 
   refreshMarketMetadata()
