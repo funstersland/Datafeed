@@ -182,8 +182,8 @@ async function main(): Promise<void> {
   // Live TWAP first — never wait on historical seed to start capturing.
   feed.start();
 
-  server.listen(PORT, () => {
-    console.log(`[datafeed] listening on http://localhost:${PORT}`);
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`[datafeed] listening on http://0.0.0.0:${PORT}`);
   });
 
   refreshMarketMetadata()
