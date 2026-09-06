@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+.git
+.cursor
+*.db
+*.db-*
+.env
+.env.*
+/opt
+scripts
+playwright*
+**/*.png
+**/*.mp4

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Datafeed — Polymarket TWAP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,500;0,9..40,700;1,9..40,500&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+    <header class="top">
+      <div class="brand-block">
+        <p class="brand">Datafeed</p>
+        <p class="tagline">Polymarket Chainlink TWAP candles only</p>
+      </div>
+      <div class="status-block">
+        <span id="feed-status" class="status">connecting</span>
+        <span id="stats" class="stats"></span>
+      </div>
+    </header>
+
+    <main>
+      <section class="controls">
+        <div class="control-group" role="tablist" aria-label="Pair">
+          <button class="chip active" data-pair="BTC">BTC</button>
+          <button class="chip" data-pair="SOL">SOL</button>
+          <button class="chip" data-pair="ETH">ETH</button>
+          <button class="chip" data-pair="HYPE">HYPE</button>
+          <button class="chip" data-pair="XRP">XRP</button>
+          <button class="chip" data-pair="DOGE">DOGE</button>
+        </div>
+        <div class="control-group" role="tablist" aria-label="Time window">
+          <button class="chip active" data-window="5m">5M</button>
+          <button class="chip" data-window="15m">15M</button>
+          <button class="chip" data-window="1h">1H</button>
+          <button class="chip" data-window="1d">Daily</button>
+        </div>
+        <div class="control-group download-group" aria-label="Download chart data">
+          <button class="chip download" id="download-csv" type="button">Download CSV</button>
+          <button class="chip download" id="download-json" type="button">Download JSON</button>
+        </div>
+      </section>
+
+      <section class="chart-panel">
+        <div class="chart-meta">
+          <div>
+            <h1 id="series-title">BTC · 5M</h1>
+            <p id="resolution" class="resolution">Resolution source loading…</p>
+          </div>
+          <div id="ohlc" class="ohlc" aria-live="polite"></div>
+        </div>
+        <div id="chart" class="chart"></div>
+        <p class="footnote">
+          Green / red candles from Polymarket TWAP (Chainlink 60s via Polymarket RTDS).
+          1H and Daily are built from the same TWAP feed — Polymarket does not publish those chart intervals.
+        </p>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "Datafeed",
+  "install": "npm install",
+  "terminals": [
+    {
+      "name": "datafeed",
+      "command": "npm run dev"
+    }
+  ],
+  "ports": [3847]
+}
