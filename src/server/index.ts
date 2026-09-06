@@ -182,8 +182,9 @@ async function main(): Promise<void> {
   // Live TWAP first — never wait on historical seed to start capturing.
   feed.start();
 
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[datafeed] listening on http://0.0.0.0:${PORT}`);
+  // Bind :: so both IPv6 localhost and IPv4 (127.0.0.1) work in the agent browser.
+  server.listen({ port: PORT, host: "::", ipv6Only: false }, () => {
+    console.log(`[datafeed] listening on http://127.0.0.1:${PORT} (and [::1]:${PORT})`);
   });
 
   refreshMarketMetadata()
