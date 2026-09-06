@@ -122,6 +122,18 @@ main {
   border-color: var(--accent);
 }
 
+.chip.download {
+  border-color: rgba(200, 245, 106, 0.35);
+}
+
+.chip.download:hover {
+  background: rgba(200, 245, 106, 0.12);
+}
+
+.download-group {
+  margin-left: auto;
+}
+
 .chart-panel {
   background: var(--panel);
   border: 1px solid var(--line);

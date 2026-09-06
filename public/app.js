@@ -120,6 +120,16 @@ async function loadSeries() {
   state.chart.timeScale().fitContent();
 }
 
+function downloadChartData(format) {
+  const url = `/api/candles/${state.pair}/${state.window}/download?format=${format}&limit=44000`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 function wireControls() {
   document.querySelectorAll("[data-pair]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -137,6 +147,8 @@ function wireControls() {
       loadSeries();
     });
   });
+  $("download-csv").addEventListener("click", () => downloadChartData("csv"));
+  $("download-json").addEventListener("click", () => downloadChartData("json"));
 }
 
 function connectWs() {

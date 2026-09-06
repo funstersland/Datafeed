@@ -156,6 +156,78 @@ async function main(): Promise<void> {
     });
   });
 
+  app.get("/api/candles/:pair/:window/download", (req, res) => {
+    const pair = String(req.params.pair ?? "").toUpperCase();
+    const window = String(req.params.window ?? "");
+    if (!isPair(pair) || !isWindow(window)) {
+      res.status(400).json({ error: "invalid pair or window" });
+      return;
+    }
+    const format = String(req.query.format ?? "csv").toLowerCase();
+    const limit = Math.min(
+      Number(req.query.limit ?? 44_000) || 44_000,
+      44_000,
+    );
+    const candles = getCandles(pair, window, limit);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const base = `datafeed_${pair}_${window}_${stamp}`;
+
+    if (format === "json") {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${base}.json"`,
+      );
+      res.json({
+        pair,
+        window,
+        source: "polymarket-twap",
+        exportedAt: new Date().toISOString(),
+        count: candles.length,
+        candles,
+      });
+      return;
+    }
+
+    if (format !== "csv") {
+      res.status(400).json({ error: "format must be csv or json" });
+      return;
+    }
+
+    const header = [
+      "open_time_iso",
+      "open_time_ms",
+      "open",
+      "high",
+      "low",
+      "close",
+      "tick_count",
+      "closed",
+      "source",
+      "updated_at_ms",
+    ].join(",");
+    const lines = candles.map((c) =>
+      [
+        new Date(c.openTimeMs).toISOString(),
+        c.openTimeMs,
+        c.open,
+        c.high,
+        c.low,
+        c.close,
+        c.tickCount,
+        c.closed,
+        JSON.stringify(c.source),
+        c.updatedAtMs,
+      ].join(","),
+    );
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${base}.csv"`,
+    );
+    res.send([header, ...lines].join("\n"));
+  });
+
   app.get("/api/pairs", (_req, res) => {
     res.json({ pairs: PAIRS, windows: WINDOWS });
   });
