@@ -39,6 +39,8 @@ railway domain
 
 Railway sets `PORT` automatically. Persist SQLite by mounting a volume at `/data` and setting `DATAFEED_DB=/data/datafeed.sqlite`.
 
+**Live:** https://datafeed-production-d38d.up.railway.app
+
 ## Data sources (Polymarket only)
 
 - `wss://ws-live-data.polymarket.com` — live TWAP
