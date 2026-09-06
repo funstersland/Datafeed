@@ -62,6 +62,57 @@
           1H and Daily are built from the same TWAP feed — Polymarket does not publish those chart intervals.
         </p>
       </section>
+
+      <section class="pnl-panel" aria-labelledby="pnl-title">
+        <div class="pnl-header">
+          <div>
+            <h2 id="pnl-title">PnL calculator</h2>
+            <p class="pnl-desc">
+              Follow candle color: trade the same color as the last closed candle until it flips,
+              then switch and keep following the new color.
+            </p>
+          </div>
+          <button class="chip download" id="pnl-run" type="button">Calculate</button>
+        </div>
+
+        <div class="pnl-controls">
+          <label class="pnl-field">
+            <span>Base stake</span>
+            <input id="pnl-stake" type="number" min="0.01" step="0.01" value="1" />
+          </label>
+          <label class="pnl-field">
+            <span>Win payout (× stake)</span>
+            <input id="pnl-payout" type="number" min="0.01" step="0.01" value="1" />
+          </label>
+          <label class="pnl-field">
+            <span>Candles used</span>
+            <input id="pnl-limit" type="number" min="50" max="44000" step="50" value="1500" />
+          </label>
+          <label class="pnl-check">
+            <input id="pnl-martingale" type="checkbox" />
+            <span>Martingale — double stake after a loss until prior losses are recovered, then reset</span>
+          </label>
+        </div>
+
+        <div id="pnl-summary" class="pnl-summary" aria-live="polite"></div>
+        <div class="pnl-table-wrap">
+          <table class="pnl-table" id="pnl-table" hidden>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Time</th>
+                <th>Predict</th>
+                <th>Actual</th>
+                <th>Stake</th>
+                <th>Result</th>
+                <th>PnL</th>
+                <th>Balance</th>
+              </tr>
+            </thead>
+            <tbody id="pnl-tbody"></tbody>
+          </table>
+        </div>
+      </section>
     </main>
 
     <script src="/app.js"></script>
