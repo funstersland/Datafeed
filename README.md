@@ -25,7 +25,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:8787`.
+Open `http://localhost:5055`.
 
 ## Data sources (Polymarket only)
 

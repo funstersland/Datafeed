@@ -75,4 +75,4 @@ export const POLYMARKET = {
 } as const;
 
 export const DB_PATH = process.env.DATAFEED_DB ?? "data/datafeed.sqlite";
-export const PORT = Number(process.env.PORT ?? 8787);
+export const PORT = Number(process.env.PORT ?? 5055);
