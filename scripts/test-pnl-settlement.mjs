@@ -10,14 +10,15 @@ function candleColor(candle) {
 
 function runColorFollowStrategy(
   candles,
-  { baseStake, payout, martingale, capital, candlesRequested },
+  { baseStake, payout, martingale, capital, candlesRequested, seriesTotal },
 ) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
   const usable = closed.length >= 2 ? closed : candles;
   const requested = Number.isFinite(candlesRequested)
     ? candlesRequested
-    : usable.length;
-  const notEnoughCandleData = usable.length < requested;
+    : candles.length;
+  const fetched = candles.length;
+  const notEnoughCandleData = usable.length < 2 || fetched < requested;
   const trades = [];
   let stake = baseStake;
   const startCapital = Number.isFinite(capital) ? capital : baseStake;
@@ -41,9 +42,11 @@ function runColorFollowStrategy(
       liquidatedReason: null,
       notEnoughCandleData: true,
       stopReason: "not_enough_candle_data",
-      statusMessage: `Not Enough Candle Data — need at least 2 candles, have ${usable.length}`,
+      statusMessage: `Not Enough Candle Data — need at least 2 closed candles, have ${usable.length}`,
       candlesAvailable: usable.length,
+      candlesFetched: fetched,
       candlesRequested: requested,
+      seriesTotal: Number.isFinite(seriesTotal) ? seriesTotal : null,
     };
   }
 
@@ -115,7 +118,7 @@ function runColorFollowStrategy(
   if (stopReason === "liquidated") {
     statusMessage = `${liquidatedReason} (${candlesRemaining} candle${candlesRemaining === 1 ? "" : "s"} still unused — not a data shortage)`;
   } else if (notEnoughCandleData) {
-    statusMessage = `Not Enough Candle Data — have ${usable.length}, requested ${requested}`;
+    statusMessage = `Not Enough Candle Data — fetched ${fetched} for this chart, requested ${requested}`;
     stopReason = "not_enough_candle_data";
   }
 
@@ -132,8 +135,10 @@ function runColorFollowStrategy(
     stopReason,
     statusMessage,
     candlesAvailable: usable.length,
+    candlesFetched: fetched,
     candlesRequested: requested,
     candlesRemaining,
+    seriesTotal: Number.isFinite(seriesTotal) ? seriesTotal : null,
   };
 }
 
@@ -230,6 +235,7 @@ function candlesFromColors(colors) {
 
 // Not enough candle data vs liquidation distinction
 {
+  // Fetched fewer rows than requested → real shortage
   const short = candlesFromColors(["green", "green", "red"]);
   const result = runColorFollowStrategy(short, {
     baseStake: 1,
@@ -248,6 +254,28 @@ function candlesFromColors(colors) {
     /Not Enough Candle Data/i.test(result.statusMessage || ""),
     `status should say Not Enough Candle Data, got: ${result.statusMessage}`,
   );
+}
+
+{
+  // Fetched full request, but one open candle excluded from closed set → NOT a shortage
+  const rows = candlesFromColors(Array.from({ length: 49 }, () => "green"));
+  rows.push({ open: 1, close: 2, closed: false, openTimeMs: 49_000 }); // open candle
+  const result = runColorFollowStrategy(rows, {
+    baseStake: 1,
+    payout: 2,
+    martingale: false,
+    capital: 1000,
+    candlesRequested: 50,
+    seriesTotal: 504,
+  });
+  assertClose(result.candlesFetched, 50, "fetched 50");
+  assertClose(result.candlesAvailable, 49, "49 closed usable");
+  assert(!result.notEnoughCandleData, "open candle gap is not a shortage");
+  assert(
+    result.stopReason === "completed",
+    `expected completed, got ${result.stopReason}`,
+  );
+  assert(!result.statusMessage, "no shortage status when fetch filled request");
 }
 
 {
