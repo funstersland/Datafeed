@@ -343,6 +343,89 @@ main {
   color: var(--down);
 }
 
+.pnl-hours-block {
+  grid-column: 1 / -1;
+  margin-top: 0.35rem;
+}
+
+.pnl-hours-heading {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.45rem;
+}
+
+.pnl-hours-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.pnl-hour-card {
+  border: 1px solid var(--line);
+  background: rgba(232, 240, 234, 0.03);
+  padding: 0.4rem 0.35rem;
+  text-align: center;
+  min-width: 0;
+}
+
+.pnl-hour-card.top-profit {
+  border-color: rgba(23, 201, 100, 0.55);
+  background: rgba(23, 201, 100, 0.1);
+}
+
+.pnl-hour-card.top-loss {
+  border-color: rgba(243, 18, 96, 0.55);
+  background: rgba(243, 18, 96, 0.08);
+}
+
+.pnl-hour-card .hour-label {
+  display: block;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  margin-bottom: 0.2rem;
+}
+
+.pnl-hour-card .hour-pnl {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.2;
+  word-break: break-all;
+}
+
+.pnl-hour-card .hour-pnl.up {
+  color: var(--up);
+}
+
+.pnl-hour-card .hour-pnl.down {
+  color: var(--down);
+}
+
+.pnl-hour-card .hour-wl {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+}
+
+@media (max-width: 900px) {
+  .pnl-hours-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .pnl-hours-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 .pnl-table-wrap {
   overflow-x: auto;
   max-height: 22rem;
