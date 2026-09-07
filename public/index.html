@@ -69,12 +69,36 @@
             <h2 id="pnl-title">PnL calculator</h2>
             <p class="pnl-desc">
               Follow candle color until it flips, then follow the new color.
-              Set capital first: every lot is subtracted from balance, every win profit
-              is added back. If balance cannot fund the next lot or goes negative —
-              account liquidated.
+              Wallet: invest lot → subtract from capital; on a win the lot ×
+              <strong>payout multiplier</strong> is returned
+              (multiplier <strong>2</strong> means $40 stake returns $80 → net +$40).
+              Loss keeps the lot gone. Cannot fund next lot → liquidated.
             </p>
           </div>
           <button class="chip download" id="pnl-run" type="button">Calculate</button>
+        </div>
+
+        <div class="pnl-controls">
+          <div class="pnl-select-group" role="tablist" aria-label="PnL pair">
+            <span class="pnl-select-label">Pair</span>
+            <div class="control-group" id="pnl-pairs">
+              <button class="chip active" type="button" data-pnl-pair="BTC">BTC</button>
+              <button class="chip" type="button" data-pnl-pair="SOL">SOL</button>
+              <button class="chip" type="button" data-pnl-pair="ETH">ETH</button>
+              <button class="chip" type="button" data-pnl-pair="HYPE">HYPE</button>
+              <button class="chip" type="button" data-pnl-pair="XRP">XRP</button>
+              <button class="chip" type="button" data-pnl-pair="DOGE">DOGE</button>
+            </div>
+          </div>
+          <div class="pnl-select-group" role="tablist" aria-label="PnL time window">
+            <span class="pnl-select-label">Window</span>
+            <div class="control-group" id="pnl-windows">
+              <button class="chip active" type="button" data-pnl-window="5m">5M</button>
+              <button class="chip" type="button" data-pnl-window="15m">15M</button>
+              <button class="chip" type="button" data-pnl-window="1h">1H</button>
+              <button class="chip" type="button" data-pnl-window="1d">Daily</button>
+            </div>
+          </div>
         </div>
 
         <div class="pnl-controls">
@@ -87,18 +111,61 @@
             <input id="pnl-stake" type="number" min="0.01" step="0.01" value="1" />
           </label>
           <label class="pnl-field">
-            <span>Win profit (× lot)</span>
-            <input id="pnl-payout" type="number" min="1" step="0.01" value="2" title="Profit credited to balance after the lot is deducted. 2 = add $2 per $1 lot on a win." />
+            <span>Payout multiplier</span>
+            <input
+              id="pnl-payout"
+              type="number"
+              min="1"
+              max="10"
+              step="0.01"
+              value="2"
+              title="Multiplier only — not dollars. 2 means $40 stake returns $80 total (net +$40). Do not enter 20."
+            />
           </label>
-          <label class="pnl-field">
+          <label class="pnl-field pnl-limit-field">
             <span>Candles used</span>
-            <input id="pnl-limit" type="number" min="50" max="44000" step="50" value="1500" />
+            <div class="pnl-limit-row">
+              <input
+                id="pnl-limit"
+                type="number"
+                min="2"
+                max="44000"
+                step="1"
+                value=""
+                placeholder="max —"
+                title="How many candles to use from this pair/window series"
+              />
+              <button class="chip download" id="pnl-limit-max" type="button" title="Use all candles available for this series">Max</button>
+            </div>
           </label>
           <label class="pnl-check">
             <input id="pnl-martingale" type="checkbox" />
             <span>Martingale — double stake after a loss until prior losses are recovered, then reset</span>
           </label>
+          <label class="pnl-check">
+            <input id="pnl-martingale-cap3" type="checkbox" />
+            <span>
+              Cap martingale at 3 losses — stakes 1→2→4 then reset to base; any win also resets to base (no 4th double)
+            </span>
+          </label>
+          <label class="pnl-check">
+            <input id="pnl-cont3-entry" type="checkbox" />
+            <span>
+              Continuation entry — after 3 consecutive losses, wait for 2 same colors then place on
+              the 3rd same-color candle; if that loses (4th loss), wait for another continuation
+            </span>
+          </label>
+          <label class="pnl-check">
+            <input id="pnl-halfhour-5" type="checkbox" />
+            <span>
+              5-loss half-hour break — after 5 consecutive losses, skip for 30 minutes (candle time),
+              then join the next continuation (2 same → trade 3rd); if the next trade loses, break
+              another half hour
+            </span>
+          </label>
         </div>
+        <p id="pnl-series-hint" class="pnl-example" aria-live="polite">Series: BTC · 5M</p>
+        <p id="pnl-example" class="pnl-example" aria-live="polite"></p>
 
         <div id="pnl-summary" class="pnl-summary" aria-live="polite"></div>
         <div class="pnl-table-wrap">
@@ -111,7 +178,8 @@
                 <th>Actual</th>
                 <th>Stake</th>
                 <th>Result</th>
-                <th>PnL</th>
+                <th>Payout</th>
+                <th>Net</th>
                 <th>Balance</th>
               </tr>
             </thead>

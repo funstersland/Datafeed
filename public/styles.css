@@ -263,6 +263,51 @@ main {
   accent-color: var(--accent);
 }
 
+.pnl-select-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.pnl-select-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pnl-limit-field {
+  min-width: 11rem;
+}
+
+.pnl-limit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pnl-limit-row input {
+  width: 7.5rem;
+}
+
+.pnl-limit-row .chip {
+  padding: 0.45rem 0.55rem;
+  white-space: nowrap;
+}
+
+.pnl-example {
+  margin: -0.35rem 0 1rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.pnl-example.warn {
+  color: #f5a524;
+}
+
 .pnl-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
@@ -328,6 +373,11 @@ main {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 0.68rem;
+}
+
+.pnl-table .skip {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .pnl-table .win {
