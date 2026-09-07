@@ -69,22 +69,47 @@ function runColorFollowStrategy(
       balance += pay;
       consecutiveLosses = 0;
       if (martingale) {
-        unrecoveredLoss = Math.max(0, unrecoveredLoss - (pay - tradeStake));
-        if (unrecoveredLoss <= 1e-9) {
+        if (useCap3) {
           unrecoveredLoss = 0;
           stake = baseStake;
           resumeArmed = false;
+        } else {
+          unrecoveredLoss = Math.max(0, unrecoveredLoss - (pay - tradeStake));
+          if (unrecoveredLoss <= 1e-9) {
+            unrecoveredLoss = 0;
+            stake = baseStake;
+            resumeArmed = false;
+          }
         }
       } else resumeArmed = false;
-      trades.push({ won: true, skipped: false, stake: tradeStake, predicted, actual });
+      trades.push({
+        won: true,
+        skipped: false,
+        stake: tradeStake,
+        predicted,
+        actual,
+        nextStake: stake,
+      });
     } else {
       consecutiveLosses += 1;
       if (martingale) {
         unrecoveredLoss += tradeStake;
-        stake =
-          useCap3 && consecutiveLosses >= 3 ? baseStake : tradeStake * 2;
+        if (useCap3 && consecutiveLosses >= 3) {
+          stake = baseStake;
+          unrecoveredLoss = 0;
+          consecutiveLosses = 0;
+        } else {
+          stake = tradeStake * 2;
+        }
       }
-      trades.push({ won: false, skipped: false, stake: tradeStake, predicted, actual, nextStake: stake });
+      trades.push({
+        won: false,
+        skipped: false,
+        stake: tradeStake,
+        predicted,
+        actual,
+        nextStake: stake,
+      });
       if (
         useWait &&
         (consecutiveLosses >= 3 ||
@@ -111,7 +136,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
-// Cap@3: stakes 1,2,4 then reset — never 8
+// Cap@3: stakes 1,2,4 then reset — never 8; any win resets to base
 {
   const colors = ["g", "r", "g", "r", "g", "r"];
   const { trades } = runColorFollowStrategy(mk(colors), {
@@ -126,6 +151,22 @@ function assert(cond, msg) {
   assert(trades[2].stake === 4, "L3 stake 4");
   assert(trades[2].nextStake === 1, "after 3rd loss reset to base");
   assert(trades[3].stake === 1, "4th trade is base not 8");
+}
+
+{
+  // Loss then win must reset to base even if recovery math would keep stake elevated
+  const seq = ["g", "r", "r"]; // g>r L, r>r W
+  const { trades } = runColorFollowStrategy(mk(seq), {
+    baseStake: 1,
+    payout: 2,
+    martingale: true,
+    capital: 1000,
+    martingaleCap3: true,
+  });
+  assert(trades[0].won === false && trades[0].stake === 1, "first loss at base");
+  assert(trades[0].nextStake === 2, "doubled after loss");
+  assert(trades[1].won === true && trades[1].stake === 2, "win at 2x");
+  assert(trades[1].nextStake === 1, "cap mode resets to base after win");
 }
 
 // Cont3: after 3 losses, skip until 2 same, trade 3rd same-color candle

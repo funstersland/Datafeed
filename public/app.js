@@ -428,11 +428,18 @@ function runColorFollowStrategy(
       wins += 1;
       consecutiveLosses = 0;
       if (martingale) {
-        unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
-        if (unrecoveredLoss <= 1e-9) {
+        if (useCap3) {
+          // Cap mode: any win resets martingale to base (no carry stake).
           unrecoveredLoss = 0;
           stake = baseStake;
           resumeArmed = false;
+        } else {
+          unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
+          if (unrecoveredLoss <= 1e-9) {
+            unrecoveredLoss = 0;
+            stake = baseStake;
+            resumeArmed = false;
+          }
         }
       } else {
         resumeArmed = false;
@@ -445,7 +452,10 @@ function runColorFollowStrategy(
       if (martingale) {
         unrecoveredLoss += tradeStake;
         if (useCap3 && consecutiveLosses >= 3) {
+          // No 4th martingale step — reset to base after 3rd loss.
           stake = baseStake;
+          unrecoveredLoss = 0;
+          consecutiveLosses = 0;
         } else {
           stake = tradeStake * 2;
         }
