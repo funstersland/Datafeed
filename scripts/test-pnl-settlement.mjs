@@ -10,10 +10,14 @@ function candleColor(candle) {
 
 function runColorFollowStrategy(
   candles,
-  { baseStake, payout, martingale, capital },
+  { baseStake, payout, martingale, capital, candlesRequested },
 ) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
   const usable = closed.length >= 2 ? closed : candles;
+  const requested = Number.isFinite(candlesRequested)
+    ? candlesRequested
+    : usable.length;
+  const notEnoughCandleData = usable.length < requested;
   const trades = [];
   let stake = baseStake;
   const startCapital = Number.isFinite(capital) ? capital : baseStake;
@@ -21,8 +25,27 @@ function runColorFollowStrategy(
   let unrecoveredLoss = 0;
   let liquidated = false;
   let liquidatedReason = null;
+  let stopReason = "completed";
   let wins = 0;
   let losses = 0;
+
+  if (usable.length < 2) {
+    return {
+      trades: [],
+      wins: 0,
+      losses: 0,
+      netPnl: 0,
+      endingBalance: startCapital,
+      capital: startCapital,
+      liquidated: false,
+      liquidatedReason: null,
+      notEnoughCandleData: true,
+      stopReason: "not_enough_candle_data",
+      statusMessage: `Not Enough Candle Data — need at least 2 candles, have ${usable.length}`,
+      candlesAvailable: usable.length,
+      candlesRequested: requested,
+    };
+  }
 
   for (let i = 1; i < usable.length; i += 1) {
     const prev = usable[i - 1];
@@ -35,6 +58,7 @@ function runColorFollowStrategy(
     if (tradeStake > balance + 1e-9) {
       liquidated = true;
       liquidatedReason = `Account liquidated — lot ${tradeStake.toFixed(2)} exceeds balance ${balance.toFixed(2)}`;
+      stopReason = "liquidated";
       break;
     }
 
@@ -66,6 +90,7 @@ function runColorFollowStrategy(
     if (balance < -1e-9) {
       liquidated = true;
       liquidatedReason = "Account liquidated — balance went negative";
+      stopReason = "liquidated";
     }
 
     trades.push({
@@ -79,9 +104,19 @@ function runColorFollowStrategy(
     if (liquidated) break;
   }
 
-  if (!liquidated && balance + 1e-9 < baseStake && usable.length > trades.length + 1) {
+  const candlesRemaining = Math.max(0, usable.length - (trades.length + 1));
+  if (!liquidated && balance + 1e-9 < baseStake && candlesRemaining > 0) {
     liquidated = true;
     liquidatedReason = "Account liquidated — capital exhausted";
+    stopReason = "liquidated";
+  }
+
+  let statusMessage = null;
+  if (stopReason === "liquidated") {
+    statusMessage = `${liquidatedReason} (${candlesRemaining} candle${candlesRemaining === 1 ? "" : "s"} still unused — not a data shortage)`;
+  } else if (notEnoughCandleData) {
+    statusMessage = `Not Enough Candle Data — have ${usable.length}, requested ${requested}`;
+    stopReason = "not_enough_candle_data";
   }
 
   return {
@@ -93,6 +128,12 @@ function runColorFollowStrategy(
     capital: startCapital,
     liquidated,
     liquidatedReason,
+    notEnoughCandleData,
+    stopReason,
+    statusMessage,
+    candlesAvailable: usable.length,
+    candlesRequested: requested,
+    candlesRemaining,
   };
 }
 
@@ -189,13 +230,46 @@ function candlesFromColors(colors) {
 
 // Not enough candle data vs liquidation distinction
 {
-  const short = candlesFromColors(['green', 'green', 'red']);
-  const { trades, liquidated } = runColorFollowStrategy(short, {
-    baseStake: 1, payout: 2, martingale: false, capital: 100, candlesRequested: 300,
+  const short = candlesFromColors(["green", "green", "red"]);
+  const result = runColorFollowStrategy(short, {
+    baseStake: 1,
+    payout: 2,
+    martingale: false,
+    capital: 100,
+    candlesRequested: 300,
   });
-  // Should complete available trades, not pretend liquidated
-  assert(!liquidated, 'short history is not liquidation');
-  assert(trades.length >= 1, 'still trades what exists');
+  assert(!result.liquidated, "short history is not liquidation");
+  assert(result.trades.length >= 1, "still trades what exists");
+  assert(
+    result.stopReason === "not_enough_candle_data",
+    `expected not_enough_candle_data, got ${result.stopReason}`,
+  );
+  assert(
+    /Not Enough Candle Data/i.test(result.statusMessage || ""),
+    `status should say Not Enough Candle Data, got: ${result.statusMessage}`,
+  );
 }
-console.log('All capital / payout accounting checks passed.');
+
+{
+  const colors = [];
+  for (let i = 0; i < 40; i += 1) colors.push(i % 2 === 0 ? "green" : "red");
+  const result = runColorFollowStrategy(candlesFromColors(colors), {
+    baseStake: 1,
+    payout: 2,
+    martingale: true,
+    capital: 100,
+    candlesRequested: 300,
+  });
+  assert(result.liquidated, "should liquidate on martingale");
+  assert(
+    /still unused|not a data shortage/i.test(result.statusMessage || ""),
+    `liquidation should note unused candles, got: ${result.statusMessage}`,
+  );
+  assert(
+    !/^Not Enough Candle Data/i.test(result.statusMessage || ""),
+    "liquidation must not be labeled as Not Enough Candle Data",
+  );
+}
+
+console.log("All capital / payout accounting checks passed.");
 

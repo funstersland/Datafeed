@@ -69,9 +69,10 @@
             <h2 id="pnl-title">PnL calculator</h2>
             <p class="pnl-desc">
               Follow candle color until it flips, then follow the new color.
-              Wallet rules: invest lot → subtract from capital; on win get total payout back
-              (×2 means $1 lot returns $2 → 100 becomes 101). Loss keeps the lot gone.
-              If balance cannot fund the next lot — account liquidated.
+              Wallet: invest lot → subtract from capital; on a win the lot ×
+              <strong>payout multiplier</strong> is returned
+              (multiplier <strong>2</strong> means $40 stake returns $80 → net +$40).
+              Loss keeps the lot gone. Cannot fund next lot → liquidated.
             </p>
           </div>
           <button class="chip download" id="pnl-run" type="button">Calculate</button>
