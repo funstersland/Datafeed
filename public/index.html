@@ -155,6 +155,14 @@
               the 3rd same-color candle; if that loses (4th loss), wait for another continuation
             </span>
           </label>
+          <label class="pnl-check">
+            <input id="pnl-halfhour-5" type="checkbox" />
+            <span>
+              5-loss half-hour break — after 5 consecutive losses, skip for 30 minutes (candle time),
+              then join the next continuation (2 same → trade 3rd); if the next trade loses, break
+              another half hour
+            </span>
+          </label>
         </div>
         <p id="pnl-series-hint" class="pnl-example" aria-live="polite">Series: BTC · 5M</p>
         <p id="pnl-example" class="pnl-example" aria-live="polite"></p>

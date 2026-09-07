@@ -264,11 +264,12 @@ function formatTradeTime(ms) {
 
 /**
  * Color-follow strategy with optional martingale, continuation-3 entry,
- * and martingale cap (max 3 losses / no 4th double).
+ * 5-loss half-hour break, and martingale cap (max 3 losses / no 4th double).
  *
- * Continuation entry: after 3 losses → wait for 2 same colors, trade the 3rd same-color
- * candle; if that loses, wait for another continuation.
- * Martingale cap: after 3rd loss reset stake to base (no 8× step).
+ * Continuation entry: after 3 losses → wait for 2 same colors, trade the 3rd.
+ * Half-hour break: after 5 losses → skip 30 minutes of candle time, then join
+ * next continuation; another loss after resume → another half-hour break.
+ * Martingale cap: after 3rd loss reset stake to base (no 8×); any win resets stake.
  * Skipped rounds: Predict=skipped, Actual=real candle color.
  */
 function runColorFollowStrategy(
@@ -282,8 +283,10 @@ function runColorFollowStrategy(
     seriesTotal,
     cont3Entry = false,
     martingaleCap3 = false,
+    halfHourBreak5 = false,
   },
 ) {
+  const HALF_HOUR_MS = 30 * 60 * 1000;
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
   const usable = closed.length >= 2 ? closed : candles;
   const requested = Number.isFinite(candlesRequested)
@@ -309,12 +312,17 @@ function runColorFollowStrategy(
   let liquidatedReason = null;
   let stopReason = "completed";
   let consecutiveLosses = 0;
-  // null | "wait_two_same" | "wait_third"
+  // null | "wait_half_hour" | "wait_two_same" | "wait_third"
   let skipMode = null;
   let streakColor = null;
+  let breakUntilMs = 0;
   let resumeArmed = false;
+  let halfHourArmed = false;
+  let pendingJoinFromHalfHour = false;
   const useCont3 = Boolean(cont3Entry);
   const useCap3 = Boolean(martingaleCap3);
+  const useHalf5 = Boolean(halfHourBreak5);
+  const useContinuationJoin = useCont3 || useHalf5;
 
   const emptyResult = (statusMessage) => ({
     trades: [],
@@ -337,6 +345,7 @@ function runColorFollowStrategy(
     martingale,
     cont3Entry: useCont3,
     martingaleCap3: useCap3,
+    halfHourBreak5: useHalf5,
     baseStake,
     payout,
     liquidated: false,
@@ -378,6 +387,16 @@ function runColorFollowStrategy(
     consecutiveLosses = 0;
   };
 
+  const enterHalfHourBreak = (cur) => {
+    breakUntilMs = Number(cur.openTimeMs) + HALF_HOUR_MS;
+    skipMode = "wait_half_hour";
+    streakColor = null;
+    consecutiveLosses = 0;
+    halfHourArmed = false;
+    pendingJoinFromHalfHour = false;
+    resumeArmed = false;
+  };
+
   for (let i = 1; i < usable.length; i += 1) {
     const prev = usable[i - 1];
     const cur = usable[i];
@@ -392,7 +411,18 @@ function runColorFollowStrategy(
     }
     longestStreak = Math.max(longestStreak, currentStreakLen);
 
-    if (useCont3 && skipMode === "wait_two_same") {
+    if (useHalf5 && skipMode === "wait_half_hour") {
+      pushSkip(cur);
+      if (Number(cur.openTimeMs) >= breakUntilMs) {
+        // Half hour elapsed — join next continuation.
+        skipMode = "wait_two_same";
+        streakColor = null;
+        pendingJoinFromHalfHour = true;
+      }
+      continue;
+    }
+
+    if (useContinuationJoin && skipMode === "wait_two_same") {
       pushSkip(cur);
       if (predicted === actual) {
         streakColor = actual;
@@ -401,11 +431,15 @@ function runColorFollowStrategy(
       continue;
     }
 
-    if (useCont3 && skipMode === "wait_third") {
-      // Place on the 3rd same-color candle (this candle).
+    if (useContinuationJoin && skipMode === "wait_third") {
       skipMode = null;
       streakColor = null;
-      resumeArmed = true;
+      if (pendingJoinFromHalfHour) {
+        halfHourArmed = true;
+        pendingJoinFromHalfHour = false;
+      } else {
+        resumeArmed = true;
+      }
     }
 
     const tradeStake = stake;
@@ -429,20 +463,22 @@ function runColorFollowStrategy(
       consecutiveLosses = 0;
       if (martingale) {
         if (useCap3) {
-          // Cap mode: any win resets martingale to base (no carry stake).
           unrecoveredLoss = 0;
           stake = baseStake;
           resumeArmed = false;
+          halfHourArmed = false;
         } else {
           unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
           if (unrecoveredLoss <= 1e-9) {
             unrecoveredLoss = 0;
             stake = baseStake;
             resumeArmed = false;
+            halfHourArmed = false;
           }
         }
       } else {
         resumeArmed = false;
+        halfHourArmed = false;
       }
     } else {
       payoutReturned = 0;
@@ -452,10 +488,9 @@ function runColorFollowStrategy(
       if (martingale) {
         unrecoveredLoss += tradeStake;
         if (useCap3 && consecutiveLosses >= 3) {
-          // No 4th martingale step — reset to base after 3rd loss.
           stake = baseStake;
           unrecoveredLoss = 0;
-          consecutiveLosses = 0;
+          // keep consecutiveLosses so half-hour filter can still reach 5
         } else {
           stake = tradeStake * 2;
         }
@@ -488,12 +523,19 @@ function runColorFollowStrategy(
 
     if (liquidated) break;
 
-    if (useCont3 && !won) {
-      if (
-        consecutiveLosses >= 3 ||
-        (resumeArmed && (martingale ? unrecoveredLoss > 1e-9 : true))
-      ) {
-        enterWaitTwoSame();
+    if (!won) {
+      if (useHalf5 && (consecutiveLosses >= 5 || halfHourArmed)) {
+        // 5 consecutive losses, or the next loss after rejoining ("6th") → 30m break.
+        enterHalfHourBreak(cur);
+        continue;
+      }
+      if (useCont3) {
+        if (
+          consecutiveLosses >= 3 ||
+          (resumeArmed && (martingale ? unrecoveredLoss > 1e-9 : true))
+        ) {
+          enterWaitTwoSame();
+        }
       }
     }
   }
@@ -543,6 +585,7 @@ function runColorFollowStrategy(
     martingale,
     cont3Entry: useCont3,
     martingaleCap3: useCap3,
+    halfHourBreak5: useHalf5,
     baseStake,
     payout,
     liquidated,
@@ -601,6 +644,7 @@ function renderPnlSummary(result) {
         result.martingale ? "Martingale" : "Flat stake",
         result.martingaleCap3 ? "cap@3" : null,
         result.cont3Entry ? "cont-3 entry" : null,
+        result.halfHourBreak5 ? "5-loss 30m break" : null,
       ]
         .filter(Boolean)
         .join(" + "),
@@ -671,9 +715,10 @@ async function calculatePnl() {
   const martingale = $("pnl-martingale").checked;
   const cont3Entry = $("pnl-cont3-entry").checked;
   const martingaleCap3 = $("pnl-martingale-cap3").checked;
+  const halfHourBreak5 = $("pnl-halfhour-5").checked;
   $("pnl-limit").value = String(limit);
 
-  if ((cont3Entry || martingaleCap3) && !martingale) {
+  if ((cont3Entry || martingaleCap3 || halfHourBreak5) && !martingale) {
     $("pnl-martingale").checked = true;
   }
 
@@ -729,12 +774,13 @@ async function calculatePnl() {
     const result = runColorFollowStrategy(candles, {
       baseStake,
       payout,
-      martingale: martingale || cont3Entry || martingaleCap3,
+      martingale: martingale || cont3Entry || martingaleCap3 || halfHourBreak5,
       capital,
       candlesRequested: limit,
       seriesTotal,
       cont3Entry,
       martingaleCap3,
+      halfHourBreak5,
     });
     result.pair = pair;
     result.window = window;
@@ -789,6 +835,9 @@ function wireControls() {
   });
   $("pnl-martingale-cap3").addEventListener("change", () => {
     if ($("pnl-martingale-cap3").checked) $("pnl-martingale").checked = true;
+  });
+  $("pnl-halfhour-5").addEventListener("change", () => {
+    if ($("pnl-halfhour-5").checked) $("pnl-martingale").checked = true;
   });
   $("pnl-limit-max").addEventListener("click", () => {
     updatePnlCandleLimitField({ fillMax: true });
