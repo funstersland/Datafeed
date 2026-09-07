@@ -146,6 +146,37 @@ function formatMoney(value, { signed = true } = {}) {
   })}`;
 }
 
+function updatePnlExample() {
+  const el = $("pnl-example");
+  if (!el) return;
+  const lot = Number($("pnl-stake").value);
+  const mult = Number($("pnl-payout").value);
+  const capital = Number($("pnl-capital").value);
+  if (!Number.isFinite(lot) || lot <= 0 || !Number.isFinite(mult) || mult < 1) {
+    el.textContent = "Set lot and payout multiplier (use 2 for double-money wins).";
+    el.classList.remove("warn");
+    return;
+  }
+  const payout = lot * mult;
+  const net = payout - lot;
+  const afterInvest = Number.isFinite(capital) ? capital - lot : null;
+  const afterWin =
+    afterInvest != null ? afterInvest + payout : null;
+  el.textContent = [
+    `Multiplier ${formatMoney(mult, { signed: false })}× — not dollars.`,
+    `Example base lot: invest ${formatMoney(lot, { signed: false })} → win returns ${formatMoney(payout, { signed: false })} total (net ${formatMoney(net)}).`,
+    afterWin != null
+      ? `Capital path: ${formatMoney(capital, { signed: false })} → ${formatMoney(afterInvest, { signed: false })} → ${formatMoney(afterWin, { signed: false })}.`
+      : null,
+    mult > 5
+      ? `Warning: ${formatMoney(mult, { signed: false })}× is very high — for 2× payout enter 2 (a $40 stake would return $80, not $800).`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  el.classList.toggle("warn", mult > 5);
+}
+
 function formatPct(value) {
   if (!Number.isFinite(value)) return "—";
   return `${(value * 100).toFixed(1)}%`;
@@ -317,9 +348,9 @@ function renderPnlSummary(result) {
     ["Max drawdown", formatMoney(-result.maxDrawdown), "down"],
     ["Max stake", formatMoney(result.maxStake, { signed: false }), ""],
     [
-      "Win payout",
-      `${formatMoney(result.payout, { signed: false })}× lot`,
-      "",
+      "Payout multiplier",
+      `${formatMoney(result.payout, { signed: false })}×`,
+      result.payout > 5 ? "down" : "",
     ],
     ["Longest color streak", String(result.longestStreak), ""],
     ["Candles used", String(result.candlesUsed), ""],
@@ -380,7 +411,12 @@ async function calculatePnl() {
   }
   if (!Number.isFinite(payout) || payout < 1) {
     $("pnl-summary").innerHTML =
-      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win payout must be ≥ 1× lot (2 = $1 lot returns $2 total)</span></div>`;
+      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Payout multiplier must be ≥ 1 (use 2 for double — $40 stake returns $80)</span></div>`;
+    return;
+  }
+  if (payout > 10) {
+    $("pnl-summary").innerHTML =
+      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Payout multiplier max is 10×. For 2× wins enter 2 — not 20. ($40 × 2 = $80, not $800)</span></div>`;
     return;
   }
   if (!Number.isFinite(capital) || capital < baseStake) {
@@ -441,6 +477,11 @@ function wireControls() {
   $("download-csv").addEventListener("click", () => downloadChartData("csv"));
   $("download-json").addEventListener("click", () => downloadChartData("json"));
   $("pnl-run").addEventListener("click", () => calculatePnl());
+  ["pnl-capital", "pnl-stake", "pnl-payout"].forEach((id) => {
+    $(id).addEventListener("input", updatePnlExample);
+    $(id).addEventListener("change", updatePnlExample);
+  });
+  updatePnlExample();
 }
 
 function connectWs() {

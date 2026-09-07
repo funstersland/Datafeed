@@ -87,8 +87,16 @@
             <input id="pnl-stake" type="number" min="0.01" step="0.01" value="1" />
           </label>
           <label class="pnl-field">
-            <span>Win payout (× lot)</span>
-            <input id="pnl-payout" type="number" min="1" step="0.01" value="2" title="Total money returned on a win after the lot is deducted. 2 = $1 lot returns $2 total (100 → 99 → 101)." />
+            <span>Payout multiplier</span>
+            <input
+              id="pnl-payout"
+              type="number"
+              min="1"
+              max="10"
+              step="0.01"
+              value="2"
+              title="Multiplier only — not dollars. 2 means $40 stake returns $80 total (net +$40). Do not enter 20."
+            />
           </label>
           <label class="pnl-field">
             <span>Candles used</span>
@@ -99,6 +107,7 @@
             <span>Martingale — double stake after a loss until prior losses are recovered, then reset</span>
           </label>
         </div>
+        <p id="pnl-example" class="pnl-example" aria-live="polite"></p>
 
         <div id="pnl-summary" class="pnl-summary" aria-live="polite"></div>
         <div class="pnl-table-wrap">

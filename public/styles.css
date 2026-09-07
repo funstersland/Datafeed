@@ -263,6 +263,18 @@ main {
   accent-color: var(--accent);
 }
 
+.pnl-example {
+  margin: -0.35rem 0 1rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.pnl-example.warn {
+  color: #f5a524;
+}
+
 .pnl-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
