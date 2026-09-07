@@ -258,8 +258,74 @@ function formatPct(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+const PAKISTAN_TZ = "Asia/Karachi";
+
 function formatTradeTime(ms) {
   return new Date(ms).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+}
+
+/** Hour of day 0–23 in Pakistan Standard Time (Asia/Karachi). */
+function pakistanHour(ms) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: PAKISTAN_TZ,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(new Date(ms));
+  const hour = Number(parts.find((p) => p.type === "hour")?.value);
+  return Number.isFinite(hour) ? hour % 24 : 0;
+}
+
+function formatPakistanHourRange(hour) {
+  const h = ((Number(hour) % 24) + 24) % 24;
+  const next = (h + 1) % 24;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(h)}:00–${pad(next)}:00 PKT`;
+}
+
+/**
+ * Bucket real (non-skipped) trades by Pakistan clock hour.
+ * Returns topProfitHours / topLossHours ranked by net PnL.
+ */
+function summarizePakistanHours(trades, { topN = 3 } = {}) {
+  const byHour = new Map();
+  for (let h = 0; h < 24; h += 1) {
+    byHour.set(h, {
+      hour: h,
+      label: formatPakistanHourRange(h),
+      pnl: 0,
+      trades: 0,
+      wins: 0,
+      losses: 0,
+    });
+  }
+
+  for (const t of trades || []) {
+    if (t.skipped) continue;
+    const hour = pakistanHour(t.openTimeMs);
+    const bucket = byHour.get(hour);
+    if (!bucket) continue;
+    bucket.pnl += Number(t.pnl) || 0;
+    bucket.trades += 1;
+    if (t.won) bucket.wins += 1;
+    else bucket.losses += 1;
+  }
+
+  const active = [...byHour.values()].filter((b) => b.trades > 0);
+  const byPnlDesc = [...active].sort((a, b) => b.pnl - a.pnl || a.hour - b.hour);
+  const byPnlAsc = [...active].sort((a, b) => a.pnl - b.pnl || a.hour - b.hour);
+
+  const topProfitHours = byPnlDesc
+    .filter((b) => b.pnl > 0)
+    .slice(0, topN);
+  const topLossHours = byPnlAsc
+    .filter((b) => b.pnl < 0)
+    .slice(0, topN);
+
+  return {
+    byHour: active.sort((a, b) => a.hour - b.hour),
+    topProfitHours,
+    topLossHours,
+  };
 }
 
 /**
@@ -563,6 +629,7 @@ function runColorFollowStrategy(
   }
 
   const realTrades = wins + losses;
+  const hourSummary = summarizePakistanHours(trades);
   return {
     trades,
     candlesRequested: requested,
@@ -593,7 +660,25 @@ function runColorFollowStrategy(
     notEnoughCandleData,
     stopReason,
     statusMessage,
+    topProfitHours: hourSummary.topProfitHours,
+    topLossHours: hourSummary.topLossHours,
+    hoursByPakistan: hourSummary.byHour,
   };
+}
+
+function formatHourStatLine(bucket) {
+  const trades = `${bucket.trades} trade${bucket.trades === 1 ? "" : "s"}`;
+  return `${bucket.label} · ${formatMoney(bucket.pnl)} · ${trades}`;
+}
+
+function renderHourList(label, buckets, cls) {
+  if (!buckets?.length) {
+    return `<div class="pnl-stat pnl-stat-wide"><span class="label">${label}</span><span class="value">—</span></div>`;
+  }
+  const lines = buckets
+    .map((b) => `<li class="value ${cls}">${formatHourStatLine(b)}</li>`)
+    .join("");
+  return `<div class="pnl-stat pnl-stat-wide"><span class="label">${label}</span><ol class="pnl-hour-list">${lines}</ol></div>`;
 }
 
 function renderPnlSummary(result) {
@@ -651,12 +736,25 @@ function renderPnlSummary(result) {
       "",
     ],
   );
-  $("pnl-summary").innerHTML = rows
-    .map(
-      ([label, value, cls]) =>
-        `<div class="pnl-stat"><span class="label">${label}</span><span class="value ${cls}">${value}</span></div>`,
-    )
-    .join("");
+  const hourBlocks = [
+    renderHourList(
+      "Top profit hours (Pakistan)",
+      result.topProfitHours,
+      "up",
+    ),
+    renderHourList(
+      "Top loss hours (Pakistan)",
+      result.topLossHours,
+      "down",
+    ),
+  ].join("");
+  $("pnl-summary").innerHTML =
+    rows
+      .map(
+        ([label, value, cls]) =>
+          `<div class="pnl-stat"><span class="label">${label}</span><span class="value ${cls}">${value}</span></div>`,
+      )
+      .join("") + hourBlocks;
 }
 
 function renderPnlTrades(trades) {
