@@ -273,7 +273,7 @@ function formatTradeTime(ms) {
  *   then wait until that color breaks → resume martingale on the break candle.
  *   Any loss before full recovery → skip/wait again.
  *   After recovery → reset martingale and the 3-loss counter.
- * Skipped rounds show predict/actual as "skipped".
+ * Skipped rounds show predict as "skipped" and keep the real actual candle color.
  *
  * Capital wallet (example: capital 100, lot 1, payout 2):
  *   place lot → balance 99
@@ -364,7 +364,7 @@ function runColorFollowStrategy(
       index: trades.length + 1,
       openTimeMs: cur.openTimeMs,
       predicted: "skipped",
-      actual: "skipped",
+      actual: candleColor(cur),
       stake: 0,
       won: null,
       skipped: true,
@@ -625,7 +625,7 @@ function renderPnlTrades(trades) {
         <td>${t.index}</td>
         <td>${formatTradeTime(t.openTimeMs)}</td>
         <td class="skip">skipped</td>
-        <td class="skip">skipped</td>
+        <td class="color-${t.actual}">${t.actual}</td>
         <td class="skip">—</td>
         <td class="skip">skip</td>
         <td class="skip">—</td>

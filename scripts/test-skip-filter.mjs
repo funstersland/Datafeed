@@ -26,7 +26,7 @@ function runColorFollowStrategy(
     skips += 1;
     trades.push({
       predicted: "skipped",
-      actual: "skipped",
+      actual: candleColor(cur),
       skipped: true,
       stake: 0,
       pnl: 0,
@@ -139,7 +139,10 @@ function assert(cond, msg) {
   assert(trades[2].won === false, "T3 loss");
   assert(trades[3].skipped === true, "first skip after 3 losses");
   assert(trades[3].predicted === "skipped", "predict skipped");
-  assert(trades[3].actual === "skipped", "actual skipped");
+  assert(
+    trades[3].actual === "green" || trades[3].actual === "red",
+    "actual keeps real candle color",
+  );
   assert(skips >= 3, `expected skips, got ${skips}`);
 
   const resume = trades.find((t, i) => i > 3 && !t.skipped);
