@@ -375,6 +375,11 @@ main {
   font-size: 0.68rem;
 }
 
+.pnl-table .skip {
+  color: var(--muted);
+  font-style: italic;
+}
+
 .pnl-table .win {
   color: var(--up);
 }

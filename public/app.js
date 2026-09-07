@@ -268,6 +268,13 @@ function formatTradeTime(ms) {
  * On flip (loss), follow the new color. Optional martingale doubles stake
  * after losses until unrecovered loss is covered, then resets to base.
  *
+ * Optional skip filter:
+ *   after 3 consecutive losses → skip until 2 same colors appear,
+ *   then wait until that color breaks → resume martingale on the break candle.
+ *   Any loss before full recovery → skip/wait again.
+ *   After recovery → reset martingale and the 3-loss counter.
+ * Skipped rounds show predict/actual as "skipped".
+ *
  * Capital wallet (example: capital 100, lot 1, payout 2):
  *   place lot → balance 99
  *   win  → total payout $2 credited → balance 101 (net +1)
@@ -276,19 +283,23 @@ function formatTradeTime(ms) {
  */
 function runColorFollowStrategy(
   candles,
-  { baseStake, payout, martingale, capital, candlesRequested, seriesTotal },
+  {
+    baseStake,
+    payout,
+    martingale,
+    capital,
+    candlesRequested,
+    seriesTotal,
+    skipFilter = false,
+  },
 ) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
-  // Prefer closed candles for trades; fall back to raw rows only if almost empty.
   const usable = closed.length >= 2 ? closed : candles;
   const requested = Number.isFinite(candlesRequested)
     ? candlesRequested
     : candles.length;
   const fetched = candles.length;
-  // Shortage = DB/API could not return as many rows as requested.
-  // Do NOT treat "one open candle excluded" (fetched 50, closed 49) as a shortage.
-  const notEnoughCandleData =
-    usable.length < 2 || fetched < requested;
+  const notEnoughCandleData = usable.length < 2 || fetched < requested;
   const trades = [];
   let stake = baseStake;
   const startCapital = Number.isFinite(capital) ? capital : baseStake;
@@ -297,6 +308,7 @@ function runColorFollowStrategy(
   let maxDrawdown = 0;
   let wins = 0;
   let losses = 0;
+  let skips = 0;
   let unrecoveredLoss = 0;
   let maxStake = baseStake;
   let currentStreakColor = null;
@@ -305,6 +317,12 @@ function runColorFollowStrategy(
   let liquidated = false;
   let liquidatedReason = null;
   let stopReason = "completed";
+  let consecutiveLosses = 0;
+  // null | "wait_two_same" | "wait_break"
+  let skipMode = null;
+  let waitBreakColor = null;
+  let resumeArmed = false; // true after leaving skip until recovery completes
+  const useSkip = Boolean(skipFilter);
 
   if (usable.length < 2) {
     const haveLabel = Number.isFinite(seriesTotal)
@@ -320,6 +338,7 @@ function runColorFollowStrategy(
       tradeCount: 0,
       wins: 0,
       losses: 0,
+      skips: 0,
       winRate: 0,
       capital: startCapital,
       endingBalance: startCapital,
@@ -328,6 +347,7 @@ function runColorFollowStrategy(
       maxStake: baseStake,
       longestStreak: 0,
       martingale,
+      skipFilter: useSkip,
       baseStake,
       payout,
       liquidated: false,
@@ -338,13 +358,34 @@ function runColorFollowStrategy(
     };
   }
 
+  const pushSkip = (cur) => {
+    skips += 1;
+    trades.push({
+      index: trades.length + 1,
+      openTimeMs: cur.openTimeMs,
+      predicted: "skipped",
+      actual: "skipped",
+      stake: 0,
+      won: null,
+      skipped: true,
+      payoutReturned: 0,
+      pnl: 0,
+      balance,
+      liquidated: false,
+    });
+  };
+
+  const enterSkipWait = () => {
+    skipMode = "wait_two_same";
+    waitBreakColor = null;
+    consecutiveLosses = 0;
+  };
+
   for (let i = 1; i < usable.length; i += 1) {
     const prev = usable[i - 1];
     const cur = usable[i];
     const predicted = candleColor(prev);
     const actual = candleColor(cur);
-    const won = predicted === actual;
-    const tradeStake = stake;
 
     if (currentStreakColor === actual) {
       currentStreakLen += 1;
@@ -354,7 +395,27 @@ function runColorFollowStrategy(
     }
     longestStreak = Math.max(longestStreak, currentStreakLen);
 
-    // Cannot fund this lot from capital → liquidated (candles may still remain).
+    if (useSkip && skipMode === "wait_two_same") {
+      pushSkip(cur);
+      if (predicted === actual) {
+        waitBreakColor = actual;
+        skipMode = "wait_break";
+      }
+      continue;
+    }
+
+    if (useSkip && skipMode === "wait_break") {
+      if (actual === waitBreakColor) {
+        pushSkip(cur);
+        continue;
+      }
+      // Color broke — resume martingale on this candle.
+      skipMode = null;
+      waitBreakColor = null;
+      resumeArmed = true;
+    }
+
+    const tradeStake = stake;
     if (tradeStake > balance + 1e-9) {
       liquidated = true;
       liquidatedReason = `Account liquidated — lot ${tradeStake.toFixed(2)} exceeds balance ${balance.toFixed(2)}`;
@@ -365,23 +426,30 @@ function runColorFollowStrategy(
     balance -= tradeStake;
     let payoutReturned = 0;
     let pnl = 0;
+    const won = predicted === actual;
 
     if (won) {
       payoutReturned = tradeStake * payout;
       balance += payoutReturned;
       pnl = payoutReturned - tradeStake;
       wins += 1;
+      consecutiveLosses = 0;
       if (martingale) {
         unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
         if (unrecoveredLoss <= 1e-9) {
           unrecoveredLoss = 0;
           stake = baseStake;
+          resumeArmed = false;
         }
+      } else {
+        // Flat stake: finishing a win after skip cycle clears resume arming.
+        resumeArmed = false;
       }
     } else {
       payoutReturned = 0;
       pnl = -tradeStake;
       losses += 1;
+      consecutiveLosses += 1;
       if (martingale) {
         unrecoveredLoss += tradeStake;
         stake = tradeStake * 2;
@@ -405,6 +473,7 @@ function runColorFollowStrategy(
       actual,
       stake: tradeStake,
       won,
+      skipped: false,
       payoutReturned,
       pnl,
       balance,
@@ -412,9 +481,15 @@ function runColorFollowStrategy(
     });
 
     if (liquidated) break;
+
+    if (useSkip && !won) {
+      // 3 consecutive losses, OR any loss after resume before recovery → wait again.
+      if (consecutiveLosses >= 3 || (resumeArmed && (martingale ? unrecoveredLoss > 1e-9 : true))) {
+        enterSkipWait();
+      }
+    }
   }
 
-  // Still have candle history left but cannot fund even the base lot.
   const candlesRemaining = Math.max(0, usable.length - (trades.length + 1));
   if (
     !liquidated &&
@@ -437,6 +512,7 @@ function runColorFollowStrategy(
     stopReason = "not_enough_candle_data";
   }
 
+  const realTrades = wins + losses;
   return {
     trades,
     candlesRequested: requested,
@@ -445,10 +521,11 @@ function runColorFollowStrategy(
     candlesUsed: usable.length,
     candlesRemaining,
     seriesTotal: Number.isFinite(seriesTotal) ? seriesTotal : null,
-    tradeCount: trades.length,
+    tradeCount: realTrades,
     wins,
     losses,
-    winRate: trades.length ? wins / trades.length : 0,
+    skips,
+    winRate: realTrades ? wins / realTrades : 0,
     capital: startCapital,
     endingBalance: balance,
     netPnl: balance - startCapital,
@@ -456,6 +533,7 @@ function runColorFollowStrategy(
     maxStake,
     longestStreak,
     martingale,
+    skipFilter: useSkip,
     baseStake,
     payout,
     liquidated,
@@ -487,6 +565,7 @@ function renderPnlSummary(result) {
     ["Trades", String(result.tradeCount), ""],
     ["Wins", String(result.wins), "up"],
     ["Losses", String(result.losses), "down"],
+    ["Skipped", String(result.skips || 0), ""],
     ["Win rate", formatPct(result.winRate), ""],
     ["Max drawdown", formatMoney(-result.maxDrawdown), "down"],
     ["Max stake", formatMoney(result.maxStake, { signed: false }), ""],
@@ -507,7 +586,16 @@ function renderPnlSummary(result) {
         .join(" · "),
       result.notEnoughCandleData ? "down" : "",
     ],
-    ["Mode", result.martingale ? "Martingale" : "Flat stake", ""],
+    [
+      "Mode",
+      [
+        result.martingale ? "Martingale" : "Flat stake",
+        result.skipFilter ? "skip filter" : null,
+      ]
+        .filter(Boolean)
+        .join(" + "),
+      "",
+    ],
   );
   $("pnl-summary").innerHTML = rows
     .map(
@@ -532,6 +620,19 @@ function renderPnlTrades(trades) {
       ? `<tr><td colspan="9">Showing last ${MAX_PNL_ROWS} of ${trades.length} trades (${omitted} earlier omitted)</td></tr>`
       : "",
     ...slice.map((t) => {
+      if (t.skipped) {
+        return `<tr class="skip-row">
+        <td>${t.index}</td>
+        <td>${formatTradeTime(t.openTimeMs)}</td>
+        <td class="skip">skipped</td>
+        <td class="skip">skipped</td>
+        <td class="skip">—</td>
+        <td class="skip">skip</td>
+        <td class="skip">—</td>
+        <td class="skip">0.00</td>
+        <td>${formatMoney(t.balance, { signed: false })}</td>
+      </tr>`;
+      }
       const resultClass = t.won ? "win" : "loss";
       const balClass = t.balance < 0 || t.liquidated ? "loss" : "win";
       return `<tr>
@@ -558,7 +659,12 @@ async function calculatePnl() {
   const capital = Number($("pnl-capital").value);
   const limit = resolvePnlCandleLimit();
   const martingale = $("pnl-martingale").checked;
+  const skipFilter = $("pnl-skip-filter").checked;
   $("pnl-limit").value = String(limit);
+
+  if (skipFilter && !martingale) {
+    $("pnl-martingale").checked = true;
+  }
 
   if (!Number.isFinite(baseStake) || baseStake <= 0) {
     $("pnl-summary").innerHTML =
@@ -612,10 +718,11 @@ async function calculatePnl() {
     const result = runColorFollowStrategy(candles, {
       baseStake,
       payout,
-      martingale,
+      martingale: martingale || skipFilter,
       capital,
       candlesRequested: limit,
       seriesTotal,
+      skipFilter,
     });
     result.pair = pair;
     result.window = window;
@@ -665,6 +772,9 @@ function wireControls() {
   $("download-csv").addEventListener("click", () => downloadChartData("csv"));
   $("download-json").addEventListener("click", () => downloadChartData("json"));
   $("pnl-run").addEventListener("click", () => calculatePnl());
+  $("pnl-skip-filter").addEventListener("change", () => {
+    if ($("pnl-skip-filter").checked) $("pnl-martingale").checked = true;
+  });
   $("pnl-limit-max").addEventListener("click", () => {
     updatePnlCandleLimitField({ fillMax: true });
   });
