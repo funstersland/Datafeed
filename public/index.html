@@ -69,9 +69,9 @@
             <h2 id="pnl-title">PnL calculator</h2>
             <p class="pnl-desc">
               Follow candle color until it flips, then follow the new color.
-              Set capital first: every lot is subtracted from balance, every win profit
-              is added back. If balance cannot fund the next lot or goes negative —
-              account liquidated.
+              Wallet rules: invest lot → subtract from capital; on win get total payout back
+              (×2 means $1 lot returns $2 → 100 becomes 101). Loss keeps the lot gone.
+              If balance cannot fund the next lot — account liquidated.
             </p>
           </div>
           <button class="chip download" id="pnl-run" type="button">Calculate</button>
@@ -87,8 +87,8 @@
             <input id="pnl-stake" type="number" min="0.01" step="0.01" value="1" />
           </label>
           <label class="pnl-field">
-            <span>Win profit (× lot)</span>
-            <input id="pnl-payout" type="number" min="1" step="0.01" value="2" title="Profit credited to balance after the lot is deducted. 2 = add $2 per $1 lot on a win." />
+            <span>Win payout (× lot)</span>
+            <input id="pnl-payout" type="number" min="1" step="0.01" value="2" title="Total money returned on a win after the lot is deducted. 2 = $1 lot returns $2 total (100 → 99 → 101)." />
           </label>
           <label class="pnl-field">
             <span>Candles used</span>
@@ -111,7 +111,8 @@
                 <th>Actual</th>
                 <th>Stake</th>
                 <th>Result</th>
-                <th>PnL</th>
+                <th>Payout</th>
+                <th>Net</th>
                 <th>Balance</th>
               </tr>
             </thead>

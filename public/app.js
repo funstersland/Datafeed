@@ -136,10 +136,10 @@ function candleColor(candle) {
   return Number(candle.close) >= Number(candle.open) ? "green" : "red";
 }
 
-function formatMoney(value) {
+function formatMoney(value, { signed = true } = {}) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "—";
-  const sign = n > 0 ? "+" : "";
+  const sign = signed && n > 0 ? "+" : "";
   return `${sign}${n.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -161,15 +161,11 @@ function formatTradeTime(ms) {
  * On flip (loss), follow the new color. Optional martingale doubles stake
  * after losses until unrecovered loss is covered, then resets to base.
  *
- * Capital wallet:
- *   every lot is subtracted from balance
- *   every win credits profit (lot × payout) back into balance
+ * Capital wallet (example: capital 100, lot 1, payout 2):
+ *   place lot → balance 99
+ *   win  → total payout $2 credited → balance 101 (net +1)
+ *   loss → lot stays gone → balance 99 (net -1)
  * If the next lot cannot be funded, or balance goes negative → account liquidated.
- *
- * Example (capital 1, lot 1, payout 2):
- *   win  → lot -1, profit +2, balance 2
- *   loss → lot -1,            balance 1
- *   win  → lot -1, profit +2, balance 2
  */
 function runColorFollowStrategy(
   candles,
@@ -218,25 +214,25 @@ function runColorFollowStrategy(
 
     // Every lot is subtracted from capital/balance.
     balance -= tradeStake;
+    let payoutReturned = 0;
     let pnl = 0;
-    let profit = 0;
 
     if (won) {
-      // Profit credited to balance (payout 2 = $2 profit credit on a $1 lot).
-      profit = tradeStake * payout;
-      balance += profit;
-      pnl = profit;
+      // Total payout returned to wallet (payout 2 = $1 lot returns $2).
+      payoutReturned = tradeStake * payout;
+      balance += payoutReturned;
+      // Net = payout − lot (matches balance delta). For ×2: +1.
+      pnl = payoutReturned - tradeStake;
       wins += 1;
       if (martingale) {
-        // Net capital change this round = profit - lot.
-        const netGain = profit - tradeStake;
-        unrecoveredLoss = Math.max(0, unrecoveredLoss - netGain);
+        unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
         if (unrecoveredLoss <= 1e-9) {
           unrecoveredLoss = 0;
           stake = baseStake;
         }
       }
     } else {
+      payoutReturned = 0;
       pnl = -tradeStake;
       losses += 1;
       if (martingale) {
@@ -261,7 +257,7 @@ function runColorFollowStrategy(
       actual,
       stake: tradeStake,
       won,
-      profit,
+      payoutReturned,
       pnl,
       balance,
       liquidated: liquidated && balance < -1e-9,
@@ -311,7 +307,7 @@ function renderPnlSummary(result) {
     ["Net PnL", formatMoney(result.netPnl), pnlClass],
     [
       "Capital → balance",
-      `${formatMoney(result.capital).replace("+", "")} → ${formatMoney(result.endingBalance).replace("+", "")}`,
+      `${formatMoney(result.capital, { signed: false })} → ${formatMoney(result.endingBalance, { signed: false })}`,
       result.liquidated ? "down" : "",
     ],
     ["Trades", String(result.tradeCount), ""],
@@ -319,7 +315,12 @@ function renderPnlSummary(result) {
     ["Losses", String(result.losses), "down"],
     ["Win rate", formatPct(result.winRate), ""],
     ["Max drawdown", formatMoney(-result.maxDrawdown), "down"],
-    ["Max stake", formatMoney(result.maxStake).replace("+", ""), ""],
+    ["Max stake", formatMoney(result.maxStake, { signed: false }), ""],
+    [
+      "Win payout",
+      `${formatMoney(result.payout, { signed: false })}× lot`,
+      "",
+    ],
     ["Longest color streak", String(result.longestStreak), ""],
     ["Candles used", String(result.candlesUsed), ""],
     ["Mode", result.martingale ? "Martingale" : "Flat stake", ""],
@@ -344,20 +345,21 @@ function renderPnlTrades(trades) {
   const omitted = trades.length - slice.length;
   tbody.innerHTML = [
     omitted > 0
-      ? `<tr><td colspan="8">Showing last ${MAX_PNL_ROWS} of ${trades.length} trades (${omitted} earlier omitted)</td></tr>`
+      ? `<tr><td colspan="9">Showing last ${MAX_PNL_ROWS} of ${trades.length} trades (${omitted} earlier omitted)</td></tr>`
       : "",
     ...slice.map((t) => {
       const resultClass = t.won ? "win" : "loss";
-      const balClass = t.balance < 0 || t.liquidated ? "loss" : t.balance >= 0 ? "win" : "loss";
+      const balClass = t.balance < 0 || t.liquidated ? "loss" : "win";
       return `<tr>
         <td>${t.index}</td>
         <td>${formatTradeTime(t.openTimeMs)}</td>
         <td class="color-${t.predicted}">${t.predicted}</td>
         <td class="color-${t.actual}">${t.actual}</td>
-        <td>${formatMoney(t.stake).replace("+", "")}</td>
+        <td>${formatMoney(t.stake, { signed: false })}</td>
         <td class="${resultClass}">${t.won ? "win" : "loss"}</td>
+        <td class="${resultClass}">${formatMoney(t.payoutReturned, { signed: false })}</td>
         <td class="${resultClass}">${formatMoney(t.pnl)}</td>
-        <td class="${balClass}">${formatMoney(t.balance)}</td>
+        <td class="${balClass}">${formatMoney(t.balance, { signed: false })}</td>
       </tr>`;
     }),
   ].join("");
@@ -378,7 +380,7 @@ async function calculatePnl() {
   }
   if (!Number.isFinite(payout) || payout < 1) {
     $("pnl-summary").innerHTML =
-      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win profit must be ≥ 1× lot (2 = credit $2 per $1 lot)</span></div>`;
+      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win payout must be ≥ 1× lot (2 = $1 lot returns $2 total)</span></div>`;
     return;
   }
   if (!Number.isFinite(capital) || capital < baseStake) {

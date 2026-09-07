@@ -1,5 +1,6 @@
 /**
- * Capital wallet: lot subtracted every round; win profit credited to balance.
+ * Capital wallet: lot subtracted every round; win returns total payout to balance.
+ * Net PnL = payout − lot on wins, −lot on losses.
  * Liquidate when the next lot cannot be funded or balance goes negative.
  */
 
@@ -38,17 +39,16 @@ function runColorFollowStrategy(
     }
 
     balance -= tradeStake;
+    let payoutReturned = 0;
     let pnl = 0;
-    let profit = 0;
 
     if (won) {
-      profit = tradeStake * payout;
-      balance += profit;
-      pnl = profit;
+      payoutReturned = tradeStake * payout;
+      balance += payoutReturned;
+      pnl = payoutReturned - tradeStake;
       wins += 1;
       if (martingale) {
-        const netGain = profit - tradeStake;
-        unrecoveredLoss = Math.max(0, unrecoveredLoss - netGain);
+        unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
         if (unrecoveredLoss <= 1e-9) {
           unrecoveredLoss = 0;
           stake = baseStake;
@@ -68,7 +68,14 @@ function runColorFollowStrategy(
       liquidatedReason = "Account liquidated — balance went negative";
     }
 
-    trades.push({ won, stake: tradeStake, pnl, profit, balance, liquidated: balance < -1e-9 });
+    trades.push({
+      won,
+      stake: tradeStake,
+      payoutReturned,
+      pnl,
+      balance,
+      liquidated: balance < -1e-9,
+    });
     if (liquidated) break;
   }
 
@@ -108,37 +115,51 @@ function candlesFromColors(colors) {
   }));
 }
 
-// User example: capital 1, lot 1, payout 2 → 2, 1, 2
+// User example: capital 100, lot 1, payout 2 → 100 invest → 99 → win payout 2 → 101
 {
   const { trades, netPnl, liquidated } = runColorFollowStrategy(
-    candlesFromColors(["green", "green", "red", "red"]),
-    { baseStake: 1, payout: 2, martingale: false, capital: 1 },
+    candlesFromColors(["green", "green"]),
+    { baseStake: 1, payout: 2, martingale: false, capital: 100 },
   );
-  assertClose(trades[0].pnl, 2, "T1 profit");
-  assertClose(trades[0].balance, 2, "T1 balance");
-  assertClose(trades[1].pnl, -1, "T2 loss");
-  assertClose(trades[1].balance, 1, "T2 balance");
-  assertClose(trades[2].pnl, 2, "T3 profit");
-  assertClose(trades[2].balance, 2, "T3 balance");
-  assertClose(netPnl, 1, "net");
+  assertClose(trades[0].stake, 1, "stake");
+  assertClose(trades[0].payoutReturned, 2, "total payout returned");
+  assertClose(trades[0].pnl, 1, "net = payout - lot");
+  assertClose(trades[0].balance, 101, "100 → 99 → 101");
+  assertClose(netPnl, 1, "net pnl");
   assert(!liquidated, "not liquidated");
 }
 
-// Lot always subtracted, profit always added (capital 100)
+// Win then loss on capital 100
 {
   const { trades } = runColorFollowStrategy(
     candlesFromColors(["green", "green", "red"]),
     { baseStake: 1, payout: 2, martingale: false, capital: 100 },
   );
-  // win: 100-1+2 = 101
-  assertClose(trades[0].balance, 101, "capital win balance");
-  // loss: 101-1 = 100
-  assertClose(trades[1].balance, 100, "capital loss balance");
+  assertClose(trades[0].balance, 101, "win balance");
+  assertClose(trades[0].pnl, 1, "win net");
+  assertClose(trades[1].pnl, -1, "loss net");
+  assertClose(trades[1].payoutReturned, 0, "loss payout");
+  assertClose(trades[1].balance, 100, "loss balance");
+}
+
+// Small capital path: 1 → win 2 → loss 1 → win 2
+{
+  const { trades, netPnl, liquidated } = runColorFollowStrategy(
+    candlesFromColors(["green", "green", "red", "red"]),
+    { baseStake: 1, payout: 2, martingale: false, capital: 1 },
+  );
+  assertClose(trades[0].pnl, 1, "T1 net");
+  assertClose(trades[0].balance, 2, "T1 balance");
+  assertClose(trades[1].pnl, -1, "T2 net");
+  assertClose(trades[1].balance, 1, "T2 balance");
+  assertClose(trades[2].pnl, 1, "T3 net");
+  assertClose(trades[2].balance, 2, "T3 balance");
+  assertClose(netPnl, 1, "net");
+  assert(!liquidated, "not liquidated");
 }
 
 // Liquidated when martingale lot exceeds remaining balance
 {
-  // capital 2: loss → bal 1, next lot 2 > 1 → liquidated before placing
   const { trades, liquidated, liquidatedReason, endingBalance } =
     runColorFollowStrategy(
       candlesFromColors(["green", "red", "green", "green", "green"]),
@@ -160,10 +181,9 @@ function candlesFromColors(colors) {
     candlesFromColors(["green", "red", "red", "green", "green"]),
     { baseStake: 1, payout: 2, martingale: false, capital: 1 },
   );
-  // start 1; predict green actual red → loss → balance 0 → liquidated (can't continue)
   assertClose(trades[0].balance, 0, "wiped");
   assert(liquidated, "exhausted capital liquidates");
   assert(/liquidated/i.test(liquidatedReason || ""), "liquidated message");
 }
 
-console.log("All capital / liquidation checks passed.");
+console.log("All capital / payout accounting checks passed.");
