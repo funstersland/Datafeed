@@ -13,7 +13,6 @@ function runColorFollowStrategy(
     payout,
     martingale,
     capital,
-    skipFilter = false,
     cont3Entry = false,
     martingaleCap3 = false,
   },
@@ -27,10 +26,9 @@ function runColorFollowStrategy(
   let skipMode = null;
   let streakColor = null;
   let resumeArmed = false;
-  const useSkip = Boolean(skipFilter) && !cont3Entry;
   const useCont3 = Boolean(cont3Entry);
   const useCap3 = Boolean(martingaleCap3);
-  const useWait = useSkip || useCont3;
+  const useWait = useCont3;
 
   const pushSkip = (cur) => {
     trades.push({
@@ -52,21 +50,10 @@ function runColorFollowStrategy(
       pushSkip(cur);
       if (predicted === actual) {
         streakColor = actual;
-        skipMode = useCont3 ? "wait_third" : "wait_break";
+        skipMode = "wait_third";
       }
       continue;
     }
-
-    if (useSkip && skipMode === "wait_break") {
-      if (actual === streakColor) {
-        pushSkip(cur);
-        continue;
-      }
-      skipMode = null;
-      streakColor = null;
-      resumeArmed = true;
-    }
-
     if (useCont3 && skipMode === "wait_third") {
       skipMode = null;
       streakColor = null;
