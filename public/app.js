@@ -160,6 +160,11 @@ function formatTradeTime(ms) {
  * predict the next closed candle matches the previous candle's color.
  * On flip (loss), follow the new color. Optional martingale doubles stake
  * after losses until unrecovered loss is covered, then resets to base.
+ *
+ * Cash-flow settlement (payout = total return multiplier, e.g. 2 = even money):
+ * each round deducts the stake from balance (capital reinvested), then a win
+ * credits stake * payout. Net win PnL is therefore stake * (payout - 1);
+ * a loss keeps the deducted stake as -stake.
  */
 function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
@@ -194,9 +199,13 @@ function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
     }
     longestStreak = Math.max(longestStreak, currentStreakLen);
 
+    // Stake is reinvested every round — deduct it before settlement.
+    balance -= tradeStake;
+
     if (won) {
-      pnl = tradeStake * payout;
-      balance += pnl;
+      const grossReturn = tradeStake * payout;
+      balance += grossReturn;
+      pnl = grossReturn - tradeStake;
       wins += 1;
       if (martingale) {
         unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
@@ -207,7 +216,6 @@ function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
       }
     } else {
       pnl = -tradeStake;
-      balance += pnl;
       losses += 1;
       if (martingale) {
         unrecoveredLoss += tradeStake;
@@ -313,7 +321,12 @@ async function calculatePnl() {
   }
   if (!Number.isFinite(payout) || payout <= 0) {
     $("pnl-summary").innerHTML =
-      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Payout must be &gt; 0</span></div>`;
+      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win return must be &gt; 0</span></div>`;
+    return;
+  }
+  if (payout < 1) {
+    $("pnl-summary").innerHTML =
+      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win return is total multiplier incl. stake (use 2 for even money)</span></div>`;
     return;
   }
 

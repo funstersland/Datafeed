@@ -69,7 +69,8 @@
             <h2 id="pnl-title">PnL calculator</h2>
             <p class="pnl-desc">
               Follow candle color: trade the same color as the last closed candle until it flips,
-              then switch and keep following the new color.
+              then switch and keep following the new color. Each round deducts the stake from
+              balance (reinvested capital), then credits the payout return on a win.
             </p>
           </div>
           <button class="chip download" id="pnl-run" type="button">Calculate</button>
@@ -81,8 +82,8 @@
             <input id="pnl-stake" type="number" min="0.01" step="0.01" value="1" />
           </label>
           <label class="pnl-field">
-            <span>Win payout (× stake)</span>
-            <input id="pnl-payout" type="number" min="0.01" step="0.01" value="1" />
+            <span>Win return (× stake)</span>
+            <input id="pnl-payout" type="number" min="0.01" step="0.01" value="2" title="Total multiplier returned on a win, including stake. 2 = even money ($1 stake returns $2, net +$1)." />
           </label>
           <label class="pnl-field">
             <span>Candles used</span>
