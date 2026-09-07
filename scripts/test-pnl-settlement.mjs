@@ -186,4 +186,16 @@ function candlesFromColors(colors) {
   assert(/liquidated/i.test(liquidatedReason || ""), "liquidated message");
 }
 
-console.log("All capital / payout accounting checks passed.");
+
+// Not enough candle data vs liquidation distinction
+{
+  const short = candlesFromColors(['green', 'green', 'red']);
+  const { trades, liquidated } = runColorFollowStrategy(short, {
+    baseStake: 1, payout: 2, martingale: false, capital: 100, candlesRequested: 300,
+  });
+  // Should complete available trades, not pretend liquidated
+  assert(!liquidated, 'short history is not liquidation');
+  assert(trades.length >= 1, 'still trades what exists');
+}
+console.log('All capital / payout accounting checks passed.');
+

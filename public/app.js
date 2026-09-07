@@ -200,10 +200,14 @@ function formatTradeTime(ms) {
  */
 function runColorFollowStrategy(
   candles,
-  { baseStake, payout, martingale, capital },
+  { baseStake, payout, martingale, capital, candlesRequested },
 ) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
   const usable = closed.length >= 2 ? closed : candles;
+  const requested = Number.isFinite(candlesRequested)
+    ? candlesRequested
+    : usable.length;
+  const notEnoughCandleData = usable.length < requested;
   const trades = [];
   let stake = baseStake;
   const startCapital = Number.isFinite(capital) ? capital : baseStake;
@@ -219,6 +223,34 @@ function runColorFollowStrategy(
   let longestStreak = 0;
   let liquidated = false;
   let liquidatedReason = null;
+  let stopReason = "completed";
+
+  if (usable.length < 2) {
+    return {
+      trades: [],
+      candlesRequested: requested,
+      candlesAvailable: usable.length,
+      candlesUsed: usable.length,
+      tradeCount: 0,
+      wins: 0,
+      losses: 0,
+      winRate: 0,
+      capital: startCapital,
+      endingBalance: startCapital,
+      netPnl: 0,
+      maxDrawdown: 0,
+      maxStake: baseStake,
+      longestStreak: 0,
+      martingale,
+      baseStake,
+      payout,
+      liquidated: false,
+      liquidatedReason: null,
+      notEnoughCandleData: true,
+      stopReason: "not_enough_candle_data",
+      statusMessage: `Not Enough Candle Data — need at least 2 candles, have ${usable.length}`,
+    };
+  }
 
   for (let i = 1; i < usable.length; i += 1) {
     const prev = usable[i - 1];
@@ -236,23 +268,21 @@ function runColorFollowStrategy(
     }
     longestStreak = Math.max(longestStreak, currentStreakLen);
 
-    // Cannot fund this lot from capital → liquidated.
+    // Cannot fund this lot from capital → liquidated (candles may still remain).
     if (tradeStake > balance + 1e-9) {
       liquidated = true;
       liquidatedReason = `Account liquidated — lot ${tradeStake.toFixed(2)} exceeds balance ${balance.toFixed(2)}`;
+      stopReason = "liquidated";
       break;
     }
 
-    // Every lot is subtracted from capital/balance.
     balance -= tradeStake;
     let payoutReturned = 0;
     let pnl = 0;
 
     if (won) {
-      // Total payout returned to wallet (payout 2 = $1 lot returns $2).
       payoutReturned = tradeStake * payout;
       balance += payoutReturned;
-      // Net = payout − lot (matches balance delta). For ×2: +1.
       pnl = payoutReturned - tradeStake;
       wins += 1;
       if (martingale) {
@@ -275,6 +305,7 @@ function runColorFollowStrategy(
     if (balance < -1e-9) {
       liquidated = true;
       liquidatedReason = "Account liquidated — balance went negative";
+      stopReason = "liquidated";
     }
 
     maxStake = Math.max(maxStake, tradeStake);
@@ -297,15 +328,32 @@ function runColorFollowStrategy(
     if (liquidated) break;
   }
 
-  // Flat broke with no capital left for another base lot.
-  if (!liquidated && balance + 1e-9 < baseStake && usable.length > trades.length + 1) {
+  // Still have candle history left but cannot fund even the base lot.
+  const candlesRemaining = Math.max(0, usable.length - (trades.length + 1));
+  if (
+    !liquidated &&
+    balance + 1e-9 < baseStake &&
+    candlesRemaining > 0
+  ) {
     liquidated = true;
     liquidatedReason = "Account liquidated — capital exhausted";
+    stopReason = "liquidated";
+  }
+
+  let statusMessage = null;
+  if (stopReason === "liquidated") {
+    statusMessage = `${liquidatedReason} (${candlesRemaining} candle${candlesRemaining === 1 ? "" : "s"} still unused — not a data shortage)`;
+  } else if (notEnoughCandleData) {
+    statusMessage = `Not Enough Candle Data — have ${usable.length}, requested ${requested}`;
+    stopReason = "not_enough_candle_data";
   }
 
   return {
     trades,
+    candlesRequested: requested,
+    candlesAvailable: usable.length,
     candlesUsed: usable.length,
+    candlesRemaining,
     tradeCount: trades.length,
     wins,
     losses,
@@ -321,18 +369,21 @@ function runColorFollowStrategy(
     payout,
     liquidated,
     liquidatedReason,
+    notEnoughCandleData,
+    stopReason,
+    statusMessage,
   };
 }
 
 function renderPnlSummary(result) {
   const pnlClass = result.netPnl >= 0 ? "up" : "down";
   const rows = [];
-  if (result.liquidated) {
-    rows.push([
-      "Status",
-      result.liquidatedReason || "Account liquidated",
-      "down",
-    ]);
+  if (result.statusMessage) {
+    const statusClass =
+      result.stopReason === "not_enough_candle_data" || result.liquidated
+        ? "down"
+        : "";
+    rows.push(["Status", result.statusMessage, statusClass]);
   }
   rows.push(
     ["Net PnL", formatMoney(result.netPnl), pnlClass],
@@ -353,7 +404,11 @@ function renderPnlSummary(result) {
       result.payout > 5 ? "down" : "",
     ],
     ["Longest color streak", String(result.longestStreak), ""],
-    ["Candles used", String(result.candlesUsed), ""],
+    [
+      "Candles",
+      `${result.candlesAvailable} available / ${result.candlesRequested} requested`,
+      result.notEnoughCandleData ? "down" : "",
+    ],
     ["Mode", result.martingale ? "Martingale" : "Flat stake", ""],
   );
   $("pnl-summary").innerHTML = rows
@@ -437,7 +492,7 @@ async function calculatePnl() {
     const candles = data.candles || [];
     if (candles.length < 2) {
       $("pnl-summary").innerHTML =
-        `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Need at least 2 candles</span></div>`;
+        `<div class="pnl-stat"><span class="label">Status</span><span class="value down">Not Enough Candle Data — need at least 2 candles for ${state.pair} ${state.window}, have ${candles.length}</span></div>`;
       $("pnl-table").hidden = true;
       return;
     }
@@ -446,6 +501,7 @@ async function calculatePnl() {
       payout,
       martingale,
       capital,
+      candlesRequested: limit,
     });
     renderPnlSummary(result);
     renderPnlTrades(result.trades);
