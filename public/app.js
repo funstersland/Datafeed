@@ -4,6 +4,8 @@
 const state = {
   pair: "BTC",
   window: "5m",
+  pnlPair: "BTC",
+  pnlWindow: "5m",
   meta: [],
   chart: null,
   series: null,
@@ -144,6 +146,12 @@ function formatMoney(value, { signed = true } = {}) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+function updatePnlSeriesHint() {
+  const el = $("pnl-series-hint");
+  if (!el) return;
+  el.textContent = `Series: ${state.pnlPair} · ${state.pnlWindow.toUpperCase()}`;
 }
 
 function updatePnlExample() {
@@ -401,6 +409,7 @@ function renderPnlSummary(result) {
     rows.push(["Status", result.statusMessage, statusClass]);
   }
   rows.push(
+    ["Series", `${result.pair} · ${String(result.window).toUpperCase()}`, ""],
     ["Net PnL", formatMoney(result.netPnl), pnlClass],
     [
       "Capital → balance",
@@ -474,6 +483,8 @@ function renderPnlTrades(trades) {
 }
 
 async function calculatePnl() {
+  const pair = state.pnlPair;
+  const window = state.pnlWindow;
   const baseStake = Number($("pnl-stake").value);
   const payout = Number($("pnl-payout").value);
   const capital = Number($("pnl-capital").value);
@@ -503,17 +514,17 @@ async function calculatePnl() {
 
   $("pnl-run").disabled = true;
   $("pnl-summary").innerHTML =
-    `<div class="pnl-stat"><span class="label">Status</span><span class="value">Calculating ${state.pair} ${state.window}…</span></div>`;
+    `<div class="pnl-stat"><span class="label">Status</span><span class="value">Calculating ${pair} ${window}…</span></div>`;
 
   try {
     const res = await fetch(
-      `/api/candles/${state.pair}/${state.window}?limit=${limit}`,
+      `/api/candles/${pair}/${window}?limit=${limit}`,
     );
     const data = await res.json();
     const candles = data.candles || [];
     if (candles.length < 2) {
       $("pnl-summary").innerHTML =
-        `<div class="pnl-stat"><span class="label">Status</span><span class="value down">Not Enough Candle Data — need at least 2 candles for ${state.pair} ${state.window}, have ${candles.length}</span></div>`;
+        `<div class="pnl-stat"><span class="label">Status</span><span class="value down">Not Enough Candle Data — need at least 2 candles for ${pair} ${window}, have ${candles.length}</span></div>`;
       $("pnl-table").hidden = true;
       return;
     }
@@ -522,7 +533,7 @@ async function calculatePnl() {
     try {
       const stats = await fetch("/api/stats").then((r) => r.json());
       const row = (stats.bySeries || []).find(
-        (s) => s.pair === state.pair && s.window === state.window,
+        (s) => s.pair === pair && s.window === window,
       );
       if (row) seriesTotal = Number(row.count);
     } catch {
@@ -537,6 +548,8 @@ async function calculatePnl() {
       candlesRequested: limit,
       seriesTotal,
     });
+    result.pair = pair;
+    result.window = window;
     renderPnlSummary(result);
     renderPnlTrades(result.trades);
   } catch (err) {

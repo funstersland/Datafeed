@@ -79,6 +79,29 @@
         </div>
 
         <div class="pnl-controls">
+          <div class="pnl-select-group" role="tablist" aria-label="PnL pair">
+            <span class="pnl-select-label">Pair</span>
+            <div class="control-group" id="pnl-pairs">
+              <button class="chip active" type="button" data-pnl-pair="BTC">BTC</button>
+              <button class="chip" type="button" data-pnl-pair="SOL">SOL</button>
+              <button class="chip" type="button" data-pnl-pair="ETH">ETH</button>
+              <button class="chip" type="button" data-pnl-pair="HYPE">HYPE</button>
+              <button class="chip" type="button" data-pnl-pair="XRP">XRP</button>
+              <button class="chip" type="button" data-pnl-pair="DOGE">DOGE</button>
+            </div>
+          </div>
+          <div class="pnl-select-group" role="tablist" aria-label="PnL time window">
+            <span class="pnl-select-label">Window</span>
+            <div class="control-group" id="pnl-windows">
+              <button class="chip active" type="button" data-pnl-window="5m">5M</button>
+              <button class="chip" type="button" data-pnl-window="15m">15M</button>
+              <button class="chip" type="button" data-pnl-window="1h">1H</button>
+              <button class="chip" type="button" data-pnl-window="1d">Daily</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pnl-controls">
           <label class="pnl-field">
             <span>Capital</span>
             <input id="pnl-capital" type="number" min="0.01" step="0.01" value="100" />
@@ -108,6 +131,7 @@
             <span>Martingale — double stake after a loss until prior losses are recovered, then reset</span>
           </label>
         </div>
+        <p id="pnl-series-hint" class="pnl-example" aria-live="polite">Series: BTC · 5M</p>
         <p id="pnl-example" class="pnl-example" aria-live="polite"></p>
 
         <div id="pnl-summary" class="pnl-summary" aria-live="polite"></div>

@@ -263,6 +263,20 @@ main {
   accent-color: var(--accent);
 }
 
+.pnl-select-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.pnl-select-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .pnl-example {
   margin: -0.35rem 0 1rem;
   color: var(--muted);
