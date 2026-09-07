@@ -6,12 +6,14 @@ const state = {
   window: "5m",
   pnlPair: "BTC",
   pnlWindow: "5m",
+  seriesCounts: {},
   meta: [],
   chart: null,
   series: null,
 };
 
 const MAX_PNL_ROWS = 250;
+const HARD_CANDLE_CAP = 44000;
 
 function $(id) {
   return document.getElementById(id);
@@ -148,10 +150,76 @@ function formatMoney(value, { signed = true } = {}) {
   })}`;
 }
 
+function getPnlSeriesMax() {
+  const key = `${state.pnlPair}|${state.pnlWindow}`;
+  const n = Number(state.seriesCounts[key]);
+  if (Number.isFinite(n) && n > 0) return Math.min(HARD_CANDLE_CAP, Math.floor(n));
+  return null;
+}
+
+function applySeriesCounts(stats) {
+  const map = {};
+  for (const row of stats?.bySeries || []) {
+    map[`${row.pair}|${row.window}`] = Number(row.count) || 0;
+  }
+  state.seriesCounts = map;
+}
+
 function updatePnlSeriesHint() {
   const el = $("pnl-series-hint");
   if (!el) return;
-  el.textContent = `Series: ${state.pnlPair} · ${state.pnlWindow.toUpperCase()}`;
+  const max = getPnlSeriesMax();
+  el.textContent = max != null
+    ? `Series: ${state.pnlPair} · ${state.pnlWindow.toUpperCase()} · ${max.toLocaleString()} candles available`
+    : `Series: ${state.pnlPair} · ${state.pnlWindow.toUpperCase()}`;
+}
+
+/**
+ * Wire Candles used to the selected pair/window series max.
+ * Placeholder shows "max N"; max attribute and Max button use the same N.
+ */
+function updatePnlCandleLimitField({ fillMax = false } = {}) {
+  const input = $("pnl-limit");
+  const maxBtn = $("pnl-limit-max");
+  if (!input) return;
+
+  const seriesMax = getPnlSeriesMax();
+  const effectiveMax = seriesMax != null ? Math.max(2, seriesMax) : HARD_CANDLE_CAP;
+  input.min = "2";
+  input.max = String(effectiveMax);
+  input.placeholder = seriesMax != null ? `max ${seriesMax}` : "max —";
+  input.title =
+    seriesMax != null
+      ? `Candles available for ${state.pnlPair} ${state.pnlWindow}: ${seriesMax}. Leave blank or click Max to use all.`
+      : "Candles available for this series (loading…)";
+
+  if (maxBtn) {
+    maxBtn.disabled = seriesMax == null || seriesMax < 2;
+    maxBtn.title =
+      seriesMax != null
+        ? `Use all ${seriesMax} candles for ${state.pnlPair} ${state.pnlWindow}`
+        : "Series candle count unavailable";
+  }
+
+  const raw = input.value.trim();
+  const current = raw === "" ? null : Number(raw);
+  if (fillMax && seriesMax != null) {
+    input.value = String(seriesMax);
+  } else if (current != null && Number.isFinite(current) && current > effectiveMax) {
+    input.value = String(effectiveMax);
+  }
+
+  updatePnlSeriesHint();
+}
+
+function resolvePnlCandleLimit() {
+  const seriesMax = getPnlSeriesMax();
+  const hardMax = seriesMax != null ? Math.max(2, seriesMax) : HARD_CANDLE_CAP;
+  const raw = String($("pnl-limit").value || "").trim();
+  if (raw === "") return hardMax;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return hardMax;
+  return Math.min(hardMax, Math.max(2, Math.floor(n)));
 }
 
 function updatePnlExample() {
@@ -488,8 +556,9 @@ async function calculatePnl() {
   const baseStake = Number($("pnl-stake").value);
   const payout = Number($("pnl-payout").value);
   const capital = Number($("pnl-capital").value);
-  const limit = Math.min(44000, Math.max(50, Number($("pnl-limit").value) || 1500));
+  const limit = resolvePnlCandleLimit();
   const martingale = $("pnl-martingale").checked;
+  $("pnl-limit").value = String(limit);
 
   if (!Number.isFinite(baseStake) || baseStake <= 0) {
     $("pnl-summary").innerHTML =
@@ -577,13 +646,40 @@ function wireControls() {
       loadSeries();
     });
   });
+  document.querySelectorAll("[data-pnl-pair]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-pnl-pair]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.pnlPair = btn.getAttribute("data-pnl-pair");
+      updatePnlCandleLimitField();
+    });
+  });
+  document.querySelectorAll("[data-pnl-window]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-pnl-window]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.pnlWindow = btn.getAttribute("data-pnl-window");
+      updatePnlCandleLimitField();
+    });
+  });
   $("download-csv").addEventListener("click", () => downloadChartData("csv"));
   $("download-json").addEventListener("click", () => downloadChartData("json"));
   $("pnl-run").addEventListener("click", () => calculatePnl());
+  $("pnl-limit-max").addEventListener("click", () => {
+    updatePnlCandleLimitField({ fillMax: true });
+  });
+  $("pnl-limit").addEventListener("change", () => {
+    const max = getPnlSeriesMax();
+    if (max == null) return;
+    const n = Number($("pnl-limit").value);
+    if (Number.isFinite(n) && n > max) $("pnl-limit").value = String(max);
+    if (Number.isFinite(n) && n < 2) $("pnl-limit").value = "2";
+  });
   ["pnl-capital", "pnl-stake", "pnl-payout"].forEach((id) => {
     $(id).addEventListener("input", updatePnlExample);
     $(id).addEventListener("change", updatePnlExample);
   });
+  updatePnlCandleLimitField();
   updatePnlExample();
 }
 
@@ -602,6 +698,10 @@ function connectWs() {
       $("feed-status").textContent = msg.status || "live";
       if (msg.stats) {
         $("stats").textContent = `${msg.stats.ticks} ticks · ${msg.stats.candles} candles`;
+        if (msg.stats.bySeries) {
+          applySeriesCounts(msg.stats);
+          updatePnlCandleLimitField();
+        }
       }
     }
     if (msg.type === "meta") {
@@ -630,6 +730,8 @@ async function boot() {
   await loadSeries();
   connectWs();
   const stats = await fetch("/api/stats").then((r) => r.json());
+  applySeriesCounts(stats);
+  updatePnlCandleLimitField();
   $("stats").textContent = `${stats.ticks} ticks · ${stats.candles} candles`;
 }
 

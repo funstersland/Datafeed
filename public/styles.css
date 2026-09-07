@@ -277,6 +277,25 @@ main {
   letter-spacing: 0.04em;
 }
 
+.pnl-limit-field {
+  min-width: 11rem;
+}
+
+.pnl-limit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pnl-limit-row input {
+  width: 7.5rem;
+}
+
+.pnl-limit-row .chip {
+  padding: 0.45rem 0.55rem;
+  white-space: nowrap;
+}
+
 .pnl-example {
   margin: -0.35rem 0 1rem;
   color: var(--muted);

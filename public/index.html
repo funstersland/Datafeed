@@ -122,9 +122,21 @@
               title="Multiplier only — not dollars. 2 means $40 stake returns $80 total (net +$40). Do not enter 20."
             />
           </label>
-          <label class="pnl-field">
+          <label class="pnl-field pnl-limit-field">
             <span>Candles used</span>
-            <input id="pnl-limit" type="number" min="50" max="44000" step="50" value="1500" />
+            <div class="pnl-limit-row">
+              <input
+                id="pnl-limit"
+                type="number"
+                min="2"
+                max="44000"
+                step="1"
+                value=""
+                placeholder="max —"
+                title="How many candles to use from this pair/window series"
+              />
+              <button class="chip download" id="pnl-limit-max" type="button" title="Use all candles available for this series">Max</button>
+            </div>
           </label>
           <label class="pnl-check">
             <input id="pnl-martingale" type="checkbox" />
