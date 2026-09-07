@@ -161,18 +161,29 @@ function formatTradeTime(ms) {
  * On flip (loss), follow the new color. Optional martingale doubles stake
  * after losses until unrecovered loss is covered, then resets to base.
  *
- * Cash-flow settlement (payout = total return multiplier, e.g. 2 = even money):
- * each round deducts the stake from balance (capital reinvested), then a win
- * credits stake * payout. Net win PnL is therefore stake * (payout - 1);
- * a loss keeps the deducted stake as -stake.
+ * Wallet settlement — every round reinvests stake from balance:
+ *   balance -= stake
+ *   on win:  balance += stake * payout   (PnL column shows that credit)
+ *   on loss: stake stays gone            (PnL = -stake)
+ *
+ * Example (start 1, stake 1, payout 2):
+ *   win  → balance 2, pnl +2
+ *   loss → balance 1, pnl -1
+ *   win  → balance 2, pnl +2   (not 3 — the reinvested $1 was deducted)
  */
-function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
+function runColorFollowStrategy(
+  candles,
+  { baseStake, payout, martingale, startingBalance },
+) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
   const usable = closed.length >= 2 ? closed : candles;
   const trades = [];
   let stake = baseStake;
-  let balance = 0;
-  let peak = 0;
+  const startBal = Number.isFinite(startingBalance)
+    ? startingBalance
+    : baseStake;
+  let balance = startBal;
+  let peak = startBal;
   let maxDrawdown = 0;
   let wins = 0;
   let losses = 0;
@@ -199,16 +210,18 @@ function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
     }
     longestStreak = Math.max(longestStreak, currentStreakLen);
 
-    // Stake is reinvested every round — deduct it before settlement.
+    // Reinvest: pull stake out of wallet before the round resolves.
     balance -= tradeStake;
 
     if (won) {
-      const grossReturn = tradeStake * payout;
-      balance += grossReturn;
-      pnl = grossReturn - tradeStake;
+      // payout is total cash returned for this stake (2 = even money: $1 → $2).
+      const winCredit = tradeStake * payout;
+      balance += winCredit;
+      pnl = winCredit;
       wins += 1;
       if (martingale) {
-        unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
+        const netGain = winCredit - tradeStake;
+        unrecoveredLoss = Math.max(0, unrecoveredLoss - netGain);
         if (unrecoveredLoss <= 1e-9) {
           unrecoveredLoss = 0;
           stake = baseStake;
@@ -246,7 +259,9 @@ function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
     wins,
     losses,
     winRate: trades.length ? wins / trades.length : 0,
-    netPnl: balance,
+    startingBalance: startBal,
+    endingBalance: balance,
+    netPnl: balance - startBal,
     maxDrawdown,
     maxStake,
     longestStreak,
@@ -260,6 +275,7 @@ function renderPnlSummary(result) {
   const pnlClass = result.netPnl >= 0 ? "up" : "down";
   $("pnl-summary").innerHTML = [
     ["Net PnL", formatMoney(result.netPnl), pnlClass],
+    ["Start / end", `${formatMoney(result.startingBalance).replace("+", "")} → ${formatMoney(result.endingBalance).replace("+", "")}`, ""],
     ["Trades", String(result.tradeCount), ""],
     ["Wins", String(result.wins), "up"],
     ["Losses", String(result.losses), "down"],
@@ -311,6 +327,7 @@ function renderPnlTrades(trades) {
 async function calculatePnl() {
   const baseStake = Number($("pnl-stake").value);
   const payout = Number($("pnl-payout").value);
+  const startingBalance = Number($("pnl-start").value);
   const limit = Math.min(44000, Math.max(50, Number($("pnl-limit").value) || 1500));
   const martingale = $("pnl-martingale").checked;
 
@@ -319,14 +336,14 @@ async function calculatePnl() {
       `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Base stake must be &gt; 0</span></div>`;
     return;
   }
-  if (!Number.isFinite(payout) || payout <= 0) {
+  if (!Number.isFinite(payout) || payout < 1) {
     $("pnl-summary").innerHTML =
-      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win return must be &gt; 0</span></div>`;
+      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win return must be ≥ 1 (2 = even money: stake $1 returns $2)</span></div>`;
     return;
   }
-  if (payout < 1) {
+  if (!Number.isFinite(startingBalance) || startingBalance < baseStake) {
     $("pnl-summary").innerHTML =
-      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Win return is total multiplier incl. stake (use 2 for even money)</span></div>`;
+      `<div class="pnl-stat"><span class="label">Error</span><span class="value down">Starting balance must cover base stake</span></div>`;
     return;
   }
 
@@ -350,6 +367,7 @@ async function calculatePnl() {
       baseStake,
       payout,
       martingale,
+      startingBalance,
     });
     renderPnlSummary(result);
     renderPnlTrades(result.trades);

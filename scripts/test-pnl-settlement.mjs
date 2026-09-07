@@ -1,18 +1,29 @@
 /**
- * Verifies cash-flow PnL settlement: stake is deducted each round (reinvested),
- * wins credit stake * payout (total return), so net win = stake * (payout - 1).
+ * Wallet settlement: starting balance funds the first stake.
+ * Each round: balance -= stake; on win balance += stake * payout (PnL shows that credit).
+ *
+ * User example (start 1, stake 1, payout 2):
+ *   win  → pnl +2, balance 2
+ *   loss → pnl -1, balance 1
+ *   win  → pnl +2, balance 2  (NOT 3)
  */
 
 function candleColor(candle) {
   return Number(candle.close) >= Number(candle.open) ? "green" : "red";
 }
 
-function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
+function runColorFollowStrategy(
+  candles,
+  { baseStake, payout, martingale, startingBalance },
+) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
   const usable = closed.length >= 2 ? closed : candles;
   const trades = [];
   let stake = baseStake;
-  let balance = 0;
+  const startBal = Number.isFinite(startingBalance)
+    ? startingBalance
+    : baseStake;
+  let balance = startBal;
   let unrecoveredLoss = 0;
 
   for (let i = 1; i < usable.length; i += 1) {
@@ -27,11 +38,12 @@ function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
     balance -= tradeStake;
 
     if (won) {
-      const grossReturn = tradeStake * payout;
-      balance += grossReturn;
-      pnl = grossReturn - tradeStake;
+      const winCredit = tradeStake * payout;
+      balance += winCredit;
+      pnl = winCredit;
       if (martingale) {
-        unrecoveredLoss = Math.max(0, unrecoveredLoss - pnl);
+        const netGain = winCredit - tradeStake;
+        unrecoveredLoss = Math.max(0, unrecoveredLoss - netGain);
         if (unrecoveredLoss <= 1e-9) {
           unrecoveredLoss = 0;
           stake = baseStake;
@@ -48,7 +60,12 @@ function runColorFollowStrategy(candles, { baseStake, payout, martingale }) {
     trades.push({ won, stake: tradeStake, pnl, balance });
   }
 
-  return { trades, netPnl: balance };
+  return {
+    trades,
+    netPnl: balance - startBal,
+    endingBalance: balance,
+    startingBalance: startBal,
+  };
 }
 
 function assertClose(actual, expected, label) {
@@ -57,75 +74,74 @@ function assertClose(actual, expected, label) {
   }
 }
 
-// Flat stake, even money (payout 2): win net +1, loss -1; stake deducted then returned on win.
-{
-  const colors = ["green", "green", "green", "red", "red", "green", "green"];
-  const candles = colors.map((c, i) => ({
+function candlesFromColors(colors) {
+  return colors.map((c, i) => ({
     open: c === "green" ? 1 : 2,
     close: c === "green" ? 2 : 1,
     closed: true,
     openTimeMs: i * 1000,
   }));
-  const { trades, netPnl } = runColorFollowStrategy(candles, {
-    baseStake: 1,
-    payout: 2,
-    martingale: false,
-  });
+}
 
-  // predictions follow previous color → W,W,L,W,L,W
-  const expectedPnls = [1, 1, -1, 1, -1, 1];
-  const expectedBalances = [1, 2, 1, 2, 1, 2];
-  assertClose(trades.length, expectedPnls.length, "trade count");
+// Exact user example: win, loss, win → balances 2, 1, 2 (never 3)
+{
+  // colors: green, green (win), red (loss), red (win)
+  const { trades, netPnl, endingBalance } = runColorFollowStrategy(
+    candlesFromColors(["green", "green", "red", "red"]),
+    { baseStake: 1, payout: 2, martingale: false, startingBalance: 1 },
+  );
+  assertClose(trades.length, 3, "user example trade count");
+  assertClose(trades[0].pnl, 2, "T1 pnl");
+  assertClose(trades[0].balance, 2, "T1 balance");
+  assertClose(trades[1].pnl, -1, "T2 pnl");
+  assertClose(trades[1].balance, 1, "T2 balance");
+  assertClose(trades[2].pnl, 2, "T3 pnl");
+  assertClose(trades[2].balance, 2, "T3 balance must be 2 not 3");
+  assertClose(endingBalance, 2, "ending balance");
+  assertClose(netPnl, 1, "net pnl vs start");
+}
+
+// Buggy old formula would produce balance 3 on third row
+{
+  let buggy = 0;
+  const pnls = [2, -1, 2];
+  const buggyBalances = pnls.map((p) => {
+    buggy += p;
+    return buggy;
+  });
+  assertClose(buggyBalances[2], 3, "old buggy third balance");
+}
+
+// Flat series still consistent
+{
+  const { trades, netPnl } = runColorFollowStrategy(
+    candlesFromColors(["green", "green", "green", "red", "red", "green", "green"]),
+    { baseStake: 1, payout: 2, martingale: false, startingBalance: 1 },
+  );
+  // W,W,L,W,L,W
+  const expectedPnls = [2, 2, -1, 2, -1, 2];
+  const expectedBalances = [2, 3, 2, 3, 2, 3];
   trades.forEach((t, i) => {
-    assertClose(t.pnl, expectedPnls[i], `pnl[${i}]`);
-    assertClose(t.balance, expectedBalances[i], `balance[${i}]`);
+    assertClose(t.pnl, expectedPnls[i], `flat pnl[${i}]`);
+    assertClose(t.balance, expectedBalances[i], `flat bal[${i}]`);
   });
-  assertClose(netPnl, 2, "netPnl flat even-money");
+  assertClose(netPnl, 2, "flat net");
 }
 
-// Screenshot-style bug regression: payout 2 must NOT credit +2 net per win.
+// Martingale: unrecovered uses net gain (credit - stake)
 {
-  const wins = 31;
-  const losses = 17;
-  // Build alternating enough candles: start green, then win streak then mix
-  const colors = ["green"];
-  for (let i = 0; i < wins; i += 1) colors.push("green");
-  // After wins on green, flip to create losses/wins as needed is hard; assert formula instead:
-  const stake = 1;
-  const payout = 2;
-  const netPerWin = stake * (payout - 1);
-  const netPerLoss = -stake;
-  const expected = wins * netPerWin + losses * netPerLoss;
-  assertClose(netPerWin, 1, "net per win with payout 2");
-  assertClose(expected, 14, "31W/17L net with stake deducted");
-  // Old buggy formula was wins * stake * payout + losses * -stake = 45
-  const buggy = wins * stake * payout + losses * -stake;
-  assertClose(buggy, 45, "old buggy total");
-  if (!(expected < buggy)) throw new Error("fixed total should be lower than buggy gross credit");
-}
-
-// Martingale recovery with even money: loss 1, then win 2 recovers and resets.
-{
-  const colors = ["red", "red", "green", "green"];
-  const candles = colors.map((c, i) => ({
-    open: c === "green" ? 1 : 2,
-    close: c === "green" ? 2 : 1,
-    closed: true,
-    openTimeMs: i * 1000,
-  }));
-  const { trades, netPnl } = runColorFollowStrategy(candles, {
-    baseStake: 1,
-    payout: 2,
-    martingale: true,
-  });
-  // i=1: predict red, actual red → win stake 1, pnl +1, bal 1
-  // i=2: predict red, actual green → loss stake 1, pnl -1, bal 0, next stake 2
-  // i=3: predict green, actual green → win stake 2, pnl +2, bal 2, reset
-  assertClose(trades[0].pnl, 1, "mg trade0 pnl");
-  assertClose(trades[1].pnl, -1, "mg trade1 pnl");
-  assertClose(trades[1].stake, 1, "mg trade1 stake");
-  assertClose(trades[2].stake, 2, "mg trade2 doubled stake");
-  assertClose(trades[2].pnl, 2, "mg trade2 net pnl");
+  const { trades, netPnl } = runColorFollowStrategy(
+    candlesFromColors(["red", "red", "green", "green"]),
+    { baseStake: 1, payout: 2, martingale: true, startingBalance: 1 },
+  );
+  // W stake1 credit2 bal2; L stake1 bal1 next2; W stake2 credit4 bal 1-2+4=3
+  assertClose(trades[0].pnl, 2, "mg0 pnl");
+  assertClose(trades[0].balance, 2, "mg0 bal");
+  assertClose(trades[1].pnl, -1, "mg1 pnl");
+  assertClose(trades[1].balance, 1, "mg1 bal");
+  assertClose(trades[2].stake, 2, "mg2 stake");
+  assertClose(trades[2].pnl, 4, "mg2 pnl credit");
+  assertClose(trades[2].balance, 3, "mg2 bal");
   assertClose(netPnl, 2, "mg net");
 }
 
