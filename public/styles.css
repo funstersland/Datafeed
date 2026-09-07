@@ -335,21 +335,6 @@ main {
   font-size: 1rem;
 }
 
-.pnl-stat-wide {
-  grid-column: 1 / -1;
-}
-
-.pnl-hour-list {
-  margin: 0;
-  padding-left: 1.15rem;
-  display: grid;
-  gap: 0.25rem;
-}
-
-.pnl-hour-list .value {
-  font-size: 0.9rem;
-}
-
 .pnl-stat .value.up {
   color: var(--up);
 }
