@@ -660,13 +660,6 @@ function runColorFollowStrategy(
   };
 }
 
-function formatHourHighlightList(buckets) {
-  if (!buckets?.length) return "—";
-  return buckets
-    .map((b) => `${b.label} ${formatMoney(b.pnl)}`)
-    .join(" · ");
-}
-
 function renderHourlyPnlGrid(result) {
   const hours = result.hoursByPakistan || [];
   if (!hours.length) return "";
@@ -753,16 +746,6 @@ function renderPnlSummary(result) {
         .filter(Boolean)
         .join(" + "),
       "",
-    ],
-    [
-      "Top profit hours (PKT)",
-      formatHourHighlightList(result.topProfitHours),
-      "up",
-    ],
-    [
-      "Top loss hours (PKT)",
-      formatHourHighlightList(result.topLossHours),
-      "down",
     ],
   );
   $("pnl-summary").innerHTML =
