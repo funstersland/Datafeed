@@ -200,14 +200,19 @@ function formatTradeTime(ms) {
  */
 function runColorFollowStrategy(
   candles,
-  { baseStake, payout, martingale, capital, candlesRequested },
+  { baseStake, payout, martingale, capital, candlesRequested, seriesTotal },
 ) {
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
+  // Prefer closed candles for trades; fall back to raw rows only if almost empty.
   const usable = closed.length >= 2 ? closed : candles;
   const requested = Number.isFinite(candlesRequested)
     ? candlesRequested
-    : usable.length;
-  const notEnoughCandleData = usable.length < requested;
+    : candles.length;
+  const fetched = candles.length;
+  // Shortage = DB/API could not return as many rows as requested.
+  // Do NOT treat "one open candle excluded" (fetched 50, closed 49) as a shortage.
+  const notEnoughCandleData =
+    usable.length < 2 || fetched < requested;
   const trades = [];
   let stake = baseStake;
   const startCapital = Number.isFinite(capital) ? capital : baseStake;
@@ -226,11 +231,16 @@ function runColorFollowStrategy(
   let stopReason = "completed";
 
   if (usable.length < 2) {
+    const haveLabel = Number.isFinite(seriesTotal)
+      ? `${seriesTotal} in this chart series`
+      : `${fetched} fetched`;
     return {
       trades: [],
       candlesRequested: requested,
+      candlesFetched: fetched,
       candlesAvailable: usable.length,
       candlesUsed: usable.length,
+      seriesTotal: Number.isFinite(seriesTotal) ? seriesTotal : null,
       tradeCount: 0,
       wins: 0,
       losses: 0,
@@ -248,7 +258,7 @@ function runColorFollowStrategy(
       liquidatedReason: null,
       notEnoughCandleData: true,
       stopReason: "not_enough_candle_data",
-      statusMessage: `Not Enough Candle Data — need at least 2 candles, have ${usable.length}`,
+      statusMessage: `Not Enough Candle Data — need at least 2 closed candles, have ${usable.length} (${haveLabel})`,
     };
   }
 
@@ -344,16 +354,21 @@ function runColorFollowStrategy(
   if (stopReason === "liquidated") {
     statusMessage = `${liquidatedReason} (${candlesRemaining} candle${candlesRemaining === 1 ? "" : "s"} still unused — not a data shortage)`;
   } else if (notEnoughCandleData) {
-    statusMessage = `Not Enough Candle Data — have ${usable.length}, requested ${requested}`;
+    const seriesPart = Number.isFinite(seriesTotal)
+      ? `, series total ${seriesTotal}`
+      : "";
+    statusMessage = `Not Enough Candle Data — fetched ${fetched} for this chart, requested ${requested}${seriesPart}`;
     stopReason = "not_enough_candle_data";
   }
 
   return {
     trades,
     candlesRequested: requested,
+    candlesFetched: fetched,
     candlesAvailable: usable.length,
     candlesUsed: usable.length,
     candlesRemaining,
+    seriesTotal: Number.isFinite(seriesTotal) ? seriesTotal : null,
     tradeCount: trades.length,
     wins,
     losses,
@@ -406,7 +421,13 @@ function renderPnlSummary(result) {
     ["Longest color streak", String(result.longestStreak), ""],
     [
       "Candles",
-      `${result.candlesAvailable} available / ${result.candlesRequested} requested`,
+      [
+        `${result.candlesAvailable} closed used`,
+        `${result.candlesFetched} fetched / ${result.candlesRequested} requested`,
+        result.seriesTotal != null ? `${result.seriesTotal} in series` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
       result.notEnoughCandleData ? "down" : "",
     ],
     ["Mode", result.martingale ? "Martingale" : "Flat stake", ""],
@@ -496,12 +517,25 @@ async function calculatePnl() {
       $("pnl-table").hidden = true;
       return;
     }
+
+    let seriesTotal = null;
+    try {
+      const stats = await fetch("/api/stats").then((r) => r.json());
+      const row = (stats.bySeries || []).find(
+        (s) => s.pair === state.pair && s.window === state.window,
+      );
+      if (row) seriesTotal = Number(row.count);
+    } catch {
+      // optional enrichment
+    }
+
     const result = runColorFollowStrategy(candles, {
       baseStake,
       payout,
       martingale,
       capital,
       candlesRequested: limit,
+      seriesTotal,
     });
     renderPnlSummary(result);
     renderPnlTrades(result.trades);
