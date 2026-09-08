@@ -46,10 +46,6 @@
           <button class="chip download" id="download-csv" type="button">Download CSV</button>
           <button class="chip download" id="download-json" type="button">Download JSON</button>
         </div>
-        <label class="chart-check" for="chart-sr">
-          <input id="chart-sr" type="checkbox" />
-          <span>Support / Resistance</span>
-        </label>
       </section>
 
       <section class="chart-panel">
@@ -58,7 +54,13 @@
             <h1 id="series-title">BTC · 5M</h1>
             <p id="resolution" class="resolution">Resolution source loading…</p>
           </div>
-          <div id="ohlc" class="ohlc" aria-live="polite"></div>
+          <div class="chart-meta-right">
+            <label class="chart-check" for="chart-sr">
+              <input id="chart-sr" type="checkbox" />
+              <span>Support / Resistance</span>
+            </label>
+            <div id="ohlc" class="ohlc" aria-live="polite"></div>
+          </div>
         </div>
         <div id="chart" class="chart"></div>
         <p class="footnote">

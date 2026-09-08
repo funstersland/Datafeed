@@ -138,24 +138,34 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  color: var(--muted);
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: 0.78rem;
   cursor: pointer;
   user-select: none;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(200, 245, 106, 0.35);
   padding: 0.4rem 0.65rem;
+  background: rgba(200, 245, 106, 0.06);
 }
 
 .chart-check input {
   accent-color: var(--accent);
   margin: 0;
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
 .chart-check:has(input:checked) {
-  color: var(--ink);
-  border-color: rgba(200, 245, 106, 0.45);
-  background: rgba(200, 245, 106, 0.08);
+  color: #11180f;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.chart-meta-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
 }
 
 .chart-panel {
