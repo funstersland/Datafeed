@@ -1,10 +1,10 @@
 /**
- * Support/resistance from swing pivots + clustering.
+ * Support/resistance zones from swing pivots + clustering.
  */
 
 function findSupportResistanceLevels(
   candles,
-  { pivot = 3, maxLevels = 4, clusterPct = 0.004 } = {},
+  { pivot = 3, maxLevels = 2, clusterPct = 0.0045 } = {},
 ) {
   if (!candles?.length || candles.length < pivot * 2 + 1) {
     return { support: [], resistance: [] };
@@ -35,6 +35,8 @@ function findSupportResistanceLevels(
   const lastClose = Number(candles[candles.length - 1].close);
   const clusterTol =
     Number.isFinite(lastClose) && lastClose > 0 ? lastClose * clusterPct : 0;
+  const minHalfBand =
+    Number.isFinite(lastClose) && lastClose > 0 ? lastClose * 0.0012 : 0;
 
   const clusterLevels = (prices, prefer) => {
     if (!prices.length) return [];
@@ -54,9 +56,17 @@ function findSupportResistanceLevels(
 
     return clusters
       .map((bucketPrices) => {
+        const min = Math.min(...bucketPrices);
+        const max = Math.max(...bucketPrices);
         const avg =
           bucketPrices.reduce((s, x) => s + x, 0) / bucketPrices.length;
-        return { price: avg, touches: bucketPrices.length };
+        const half = Math.max((max - min) / 2, minHalfBand);
+        return {
+          price: avg,
+          top: avg + half,
+          bottom: avg - half,
+          touches: bucketPrices.length,
+        };
       })
       .sort((a, b) => {
         if (b.touches !== a.touches) return b.touches - a.touches;
@@ -65,8 +75,7 @@ function findSupportResistanceLevels(
       .filter((lvl) =>
         prefer === "below" ? lvl.price <= lastClose : lvl.price >= lastClose,
       )
-      .slice(0, maxLevels)
-      .map((lvl) => lvl.price);
+      .slice(0, maxLevels);
   };
 
   return {
@@ -79,7 +88,6 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
-// Synthetic V shape: low at middle should be support, highs on sides resistance-ish
 const candles = [];
 for (let i = 0; i < 40; i += 1) {
   const base = i < 20 ? 100 - i : 80 + (i - 20);
@@ -91,27 +99,33 @@ for (let i = 0; i < 40; i += 1) {
     close: base + (i % 2 === 0 ? 1 : -1),
   });
 }
-// Force a clear swing low
 candles[20] = { time: 20, open: 78, high: 79, low: 70, close: 78 };
-// Force clear swing highs
 candles[5] = { time: 5, open: 100, high: 120, low: 99, close: 100 };
 candles[35] = { time: 35, open: 100, high: 118, low: 99, close: 100 };
 
 const levels = findSupportResistanceLevels(candles, {
   pivot: 2,
-  maxLevels: 3,
+  maxLevels: 2,
   clusterPct: 0.02,
 });
 
-assert(levels.support.length >= 1, "expected support level(s)");
-assert(levels.resistance.length >= 1, "expected resistance level(s)");
+assert(levels.support.length >= 1, "expected support zone(s)");
+assert(levels.resistance.length >= 1, "expected resistance zone(s)");
 assert(
-  levels.support.every((p) => p <= candles[candles.length - 1].close + 1e-9),
+  levels.support.every((z) => z.bottom < z.price && z.top > z.price),
+  "support has band around price",
+);
+assert(
+  levels.resistance.every((z) => z.bottom < z.price && z.top > z.price),
+  "resistance has band around price",
+);
+assert(
+  levels.support.every((z) => z.price <= candles[candles.length - 1].close + 1e-9),
   "support at/below price",
 );
 assert(
-  levels.resistance.every((p) => p >= candles[candles.length - 1].close - 1e-9),
+  levels.resistance.every((z) => z.price >= candles[candles.length - 1].close - 1e-9),
   "resistance at/above price",
 );
 
-console.log("ok: support/resistance levels", levels);
+console.log("ok: support/resistance zones", levels);

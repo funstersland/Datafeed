@@ -62,7 +62,10 @@
             <div id="ohlc" class="ohlc" aria-live="polite"></div>
           </div>
         </div>
-        <div id="chart" class="chart"></div>
+        <div class="chart-wrap">
+          <div id="chart" class="chart"></div>
+          <canvas id="chart-sr-overlay" class="chart-sr-overlay" aria-hidden="true"></canvas>
+        </div>
         <p class="footnote">
           Green / red candles from Polymarket TWAP (Chainlink 60s via Polymarket RTDS).
           1H and Daily are built from the same TWAP feed — Polymarket does not publish those chart intervals.

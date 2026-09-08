@@ -12,6 +12,8 @@ const state = {
   series: null,
   chartCandles: [],
   srLines: [],
+  srZones: [],
+  srOverlay: null,
   showSr: false,
 };
 
@@ -42,6 +44,7 @@ function toChartCandle(row) {
 
 function initChart() {
   const el = $("chart");
+  state.srOverlay = $("chart-sr-overlay");
   state.chart = LightweightCharts.createChart(el, {
     layout: {
       background: { color: "transparent" },
@@ -74,11 +77,17 @@ function initChart() {
     wickDownColor: "#f31260",
   });
 
+  const redrawSr = () => drawSupportResistanceOverlay();
+  state.chart.timeScale().subscribeVisibleLogicalRangeChange(redrawSr);
+  state.chart.timeScale().subscribeVisibleTimeRangeChange(redrawSr);
+  state.series.priceScale().subscribePriceScaleSizeChange?.(redrawSr);
+
   window.addEventListener("resize", () => {
     state.chart.applyOptions({
       width: el.clientWidth,
       height: el.clientHeight,
     });
+    drawSupportResistanceOverlay();
   });
 }
 
@@ -132,11 +141,12 @@ async function loadSeries() {
 }
 
 /**
- * Swing high/low pivots → clustered support (lows) and resistance (highs).
+ * Swing high/low pivots → clustered support/resistance zones.
+ * Each level: { price, top, bottom, touches }.
  */
 function findSupportResistanceLevels(
   candles,
-  { pivot = 3, maxLevels = 4, clusterPct = 0.004 } = {},
+  { pivot = 3, maxLevels = 2, clusterPct = 0.0045 } = {},
 ) {
   if (!candles?.length || candles.length < pivot * 2 + 1) {
     return { support: [], resistance: [] };
@@ -169,6 +179,9 @@ function findSupportResistanceLevels(
     Number.isFinite(lastClose) && lastClose > 0
       ? lastClose * clusterPct
       : 0;
+  // Minimum painted band height (~0.12% of price), like the reference zones.
+  const minHalfBand =
+    Number.isFinite(lastClose) && lastClose > 0 ? lastClose * 0.0012 : 0;
 
   const clusterLevels = (prices, prefer) => {
     if (!prices.length) return [];
@@ -189,13 +202,20 @@ function findSupportResistanceLevels(
 
     return clusters
       .map((bucketPrices) => {
+        const min = Math.min(...bucketPrices);
+        const max = Math.max(...bucketPrices);
         const avg =
           bucketPrices.reduce((s, x) => s + x, 0) / bucketPrices.length;
-        return { price: avg, touches: bucketPrices.length };
+        const half = Math.max((max - min) / 2, minHalfBand);
+        return {
+          price: avg,
+          top: avg + half,
+          bottom: avg - half,
+          touches: bucketPrices.length,
+        };
       })
       .sort((a, b) => {
         if (b.touches !== a.touches) return b.touches - a.touches;
-        // Prefer levels nearer current price when touch counts tie.
         return (
           Math.abs(a.price - lastClose) - Math.abs(b.price - lastClose)
         );
@@ -203,78 +223,158 @@ function findSupportResistanceLevels(
       .filter((lvl) =>
         prefer === "below" ? lvl.price <= lastClose : lvl.price >= lastClose,
       )
-      .slice(0, maxLevels)
-      .map((lvl) => lvl.price);
+      .slice(0, maxLevels);
   };
 
-  // Support: clustered swing lows at/below price. Resistance: swing highs at/above.
   let support = clusterLevels(lows, "below");
   let resistance = clusterLevels(highs, "above");
 
-  // If filters emptied a side (e.g. strong trend), fall back to nearest raw pivots.
   if (!support.length && lows.length) {
-    support = [...lows]
-      .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
+    const nearest = [...lows]
       .filter((p) => p <= lastClose)
+      .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
       .slice(0, maxLevels);
+    support = nearest.map((price) => ({
+      price,
+      top: price + minHalfBand,
+      bottom: price - minHalfBand,
+      touches: 1,
+    }));
   }
   if (!resistance.length && highs.length) {
-    resistance = [...highs]
-      .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
+    const nearest = [...highs]
       .filter((p) => p >= lastClose)
+      .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
       .slice(0, maxLevels);
+    resistance = nearest.map((price) => ({
+      price,
+      top: price + minHalfBand,
+      bottom: price - minHalfBand,
+      touches: 1,
+    }));
   }
 
   return { support, resistance };
 }
 
 function clearSupportResistanceLines() {
-  if (!state.series || !state.srLines?.length) {
-    state.srLines = [];
-    return;
-  }
-  for (const line of state.srLines) {
-    try {
-      state.series.removePriceLine(line);
-    } catch {
-      // line may already be gone after series reset
+  if (state.series && state.srLines?.length) {
+    for (const line of state.srLines) {
+      try {
+        state.series.removePriceLine(line);
+      } catch {
+        // line may already be gone after series reset
+      }
     }
   }
   state.srLines = [];
+  state.srZones = [];
+  const canvas = state.srOverlay || $("chart-sr-overlay");
+  if (canvas) {
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function formatSrLabelPrice(price) {
+  const n = Number(price);
+  if (!Number.isFinite(n)) return "";
+  if (n >= 1000) return String(Math.round(n));
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(6);
+}
+
+function drawSupportResistanceOverlay() {
+  const canvas = state.srOverlay || $("chart-sr-overlay");
+  const wrap = canvas?.parentElement;
+  if (!canvas || !wrap || !state.series) return;
+
+  const rect = wrap.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.floor(rect.width));
+  const height = Math.max(1, Math.floor(rect.height));
+  if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+  }
+
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (!state.showSr || !state.srZones.length) return;
+
+  // Leave room for the right price scale (~68px typical).
+  const rightPad = 72;
+  const drawWidth = Math.max(0, width - rightPad);
+
+  for (const zone of state.srZones) {
+    const yTop = state.series.priceToCoordinate(zone.top);
+    const yBot = state.series.priceToCoordinate(zone.bottom);
+    const yMid = state.series.priceToCoordinate(zone.price);
+    if (yTop == null || yBot == null || yMid == null) continue;
+
+    const top = Math.min(yTop, yBot);
+    const bot = Math.max(yTop, yBot);
+    const bandH = Math.max(bot - top, 8);
+    const isSupport = zone.kind === "support";
+    const stroke = isSupport ? "rgba(23, 201, 100, 0.95)" : "rgba(243, 18, 96, 0.95)";
+    const fill = isSupport ? "rgba(23, 201, 100, 0.16)" : "rgba(243, 18, 96, 0.16)";
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(0, top, drawWidth, bandH);
+
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.moveTo(0, yMid);
+    ctx.lineTo(drawWidth, yMid);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const label = `${isSupport ? "S" : "R"} ${formatSrLabelPrice(zone.price)}`;
+    ctx.font = "600 12px 'IBM Plex Mono', monospace";
+    ctx.fillStyle = stroke;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, drawWidth - 8, yMid);
+  }
 }
 
 function refreshSupportResistance() {
   clearSupportResistanceLines();
-  if (!state.showSr || !state.series || !state.chartCandles.length) return;
+  if (!state.showSr || !state.series || !state.chartCandles.length) {
+    drawSupportResistanceOverlay();
+    return;
+  }
 
   const { support, resistance } = findSupportResistanceLevels(
     state.chartCandles,
   );
 
-  for (const price of support) {
+  state.srZones = [
+    ...support.map((z) => ({ ...z, kind: "support" })),
+    ...resistance.map((z) => ({ ...z, kind: "resistance" })),
+  ];
+
+  for (const zone of state.srZones) {
+    const isSupport = zone.kind === "support";
     state.srLines.push(
       state.series.createPriceLine({
-        price,
-        color: "#17c964",
+        price: zone.price,
+        color: isSupport ? "#17c964" : "#f31260",
         lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
         axisLabelVisible: true,
-        title: "S",
+        title: `${isSupport ? "S" : "R"} ${formatSrLabelPrice(zone.price)}`,
       }),
     );
   }
-  for (const price of resistance) {
-    state.srLines.push(
-      state.series.createPriceLine({
-        price,
-        color: "#f31260",
-        lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: "R",
-      }),
-    );
-  }
+
+  drawSupportResistanceOverlay();
 }
 
 function downloadChartData(format) {
