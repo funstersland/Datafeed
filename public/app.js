@@ -352,7 +352,8 @@ function summarizePakistanHours(trades, { topN = 3 } = {}) {
 /**
  * Color-follow strategy with optional martingale, continuation-3 entry,
  * 5-loss half-hour break, martingale cap (max 3 losses / no 4th double),
- * and RedDogi (net upside pull → red doji → bet next red once → leave).
+ * RedDogi (net upside pull → red doji → bet next red once → leave),
+ * and Red-2 entry (after 1 red → bet next red → wait for green → repeat).
  *
  * Continuation entry: after 3 losses → wait for 2 same colors, trade the 3rd.
  * Half-hour break: after 5 losses → skip 30 minutes of candle time, then join
@@ -360,6 +361,8 @@ function summarizePakistanHours(trades, { topN = 3 } = {}) {
  * Martingale cap: after 3rd loss reset stake to base (no 8×); any win resets stake.
  * RedDogi: when the last few candles are net upside (some reds OK), a red doji
  * is the signal (no bet); bet the next candle red once, then leave and repeat.
+ * Red-2: after one red signal, bet the next candle red; then wait for a green
+ * before the next red signal; martingale doubles after every loss.
  * Skipped rounds: Predict=skipped, Actual=real candle color.
  */
 function runColorFollowStrategy(
@@ -375,6 +378,7 @@ function runColorFollowStrategy(
     martingaleCap3 = false,
     halfHourBreak5 = false,
     redDogi = false,
+    red2Entry = false,
   },
 ) {
   const HALF_HOUR_MS = 30 * 60 * 1000;
@@ -413,11 +417,16 @@ function runColorFollowStrategy(
   const useCont3 = Boolean(cont3Entry);
   const useCap3 = Boolean(martingaleCap3);
   const useHalf5 = Boolean(halfHourBreak5);
-  const useRedDogi = Boolean(redDogi);
+  const useRed2 = Boolean(red2Entry);
+  const useRedDogi = Boolean(redDogi) && !useRed2;
   const useContinuationJoin = useCont3 || useHalf5;
   // hunt | bet_once — only used when useRedDogi
   let dogiPhase = "hunt";
   const DOGI_LOOKBACK = 5;
+  // wait_red | bet_red | wait_green — only used when useRed2
+  // If the first candle is already red, arm a bet on candle 2 immediately.
+  let red2Phase =
+    useRed2 && candleColor(usable[0]) === "red" ? "bet_red" : "wait_red";
 
   const emptyResult = (statusMessage) => ({
     trades: [],
@@ -442,6 +451,7 @@ function runColorFollowStrategy(
     martingaleCap3: useCap3,
     halfHourBreak5: useHalf5,
     redDogi: useRedDogi,
+    red2Entry: useRed2,
     baseStake,
     payout,
     liquidated: false,
@@ -506,7 +516,19 @@ function runColorFollowStrategy(
     }
     longestStreak = Math.max(longestStreak, currentStreakLen);
 
-    if (useRedDogi) {
+    if (useRed2) {
+      if (red2Phase === "wait_red") {
+        pushSkip(cur);
+        if (actual === "red") red2Phase = "bet_red";
+        continue;
+      }
+      if (red2Phase === "wait_green") {
+        pushSkip(cur);
+        if (actual === "green") red2Phase = "wait_red";
+        continue;
+      }
+      // red2Phase === "bet_red" → place bet predicting red
+    } else if (useRedDogi) {
       if (dogiPhase === "hunt") {
         pushSkip(cur);
         // Red doji after a net-upside pull over the last few candles → arm one bet.
@@ -553,7 +575,7 @@ function runColorFollowStrategy(
       }
     }
 
-    const predicted = useRedDogi ? "red" : candleColor(prev);
+    const predicted = useRed2 || useRedDogi ? "red" : candleColor(prev);
     const tradeStake = stake;
     if (tradeStake > balance + 1e-9) {
       liquidated = true;
@@ -635,6 +657,12 @@ function runColorFollowStrategy(
 
     if (liquidated) break;
 
+    if (useRed2) {
+      // Win (red) → wait for green before next signal. Loss (green) already satisfies green.
+      red2Phase = actual === "green" ? "wait_red" : "wait_green";
+      continue;
+    }
+
     if (useRedDogi) {
       // One bet only — leave the market and hunt the next upside→red-doji setup.
       dogiPhase = "hunt";
@@ -706,6 +734,7 @@ function runColorFollowStrategy(
     martingaleCap3: useCap3,
     halfHourBreak5: useHalf5,
     redDogi: useRedDogi,
+    red2Entry: useRed2,
     baseStake,
     payout,
     liquidated,
@@ -802,6 +831,7 @@ function renderPnlSummary(result) {
         result.cont3Entry ? "cont-3 entry" : null,
         result.halfHourBreak5 ? "5-loss 30m break" : null,
         result.redDogi ? "RedDogi" : null,
+        result.red2Entry ? "Red-2 entry" : null,
       ]
         .filter(Boolean)
         .join(" + "),
@@ -875,9 +905,13 @@ async function calculatePnl() {
   const martingaleCap3 = $("pnl-martingale-cap3").checked;
   const halfHourBreak5 = $("pnl-halfhour-5").checked;
   const redDogi = $("pnl-red-dogi").checked;
+  const red2Entry = $("pnl-red2-entry").checked;
   $("pnl-limit").value = String(limit);
 
-  if ((cont3Entry || martingaleCap3 || halfHourBreak5) && !martingale) {
+  if (
+    (cont3Entry || martingaleCap3 || halfHourBreak5 || red2Entry) &&
+    !martingale
+  ) {
     $("pnl-martingale").checked = true;
   }
 
@@ -933,7 +967,13 @@ async function calculatePnl() {
     const result = runColorFollowStrategy(candles, {
       baseStake,
       payout,
-      martingale: martingale || cont3Entry || martingaleCap3 || halfHourBreak5,
+      martingale:
+        martingale ||
+        cont3Entry ||
+        martingaleCap3 ||
+        halfHourBreak5 ||
+        red2Entry ||
+        $("pnl-martingale").checked,
       capital,
       candlesRequested: limit,
       seriesTotal,
@@ -941,6 +981,7 @@ async function calculatePnl() {
       martingaleCap3,
       halfHourBreak5,
       redDogi,
+      red2Entry,
     });
     result.pair = pair;
     result.window = window;
@@ -998,6 +1039,9 @@ function wireControls() {
   });
   $("pnl-halfhour-5").addEventListener("change", () => {
     if ($("pnl-halfhour-5").checked) $("pnl-martingale").checked = true;
+  });
+  $("pnl-red2-entry").addEventListener("change", () => {
+    if ($("pnl-red2-entry").checked) $("pnl-martingale").checked = true;
   });
   $("pnl-limit-max").addEventListener("click", () => {
     updatePnlCandleLimitField({ fillMax: true });
