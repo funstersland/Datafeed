@@ -2,6 +2,7 @@
 /* eslint-disable no-undef */
 
 const state = {
+  page: "crypto",
   pair: "BTC",
   window: "5m",
   pnlPair: "BTC",
@@ -1352,7 +1353,64 @@ async function calculatePnl() {
   }
 }
 
+function setPage(page) {
+  const next = page === "forex" ? "forex" : "crypto";
+  state.page = next;
+
+  const cryptoPanel = $("page-crypto");
+  const forexPanel = $("page-forex");
+  if (cryptoPanel) cryptoPanel.hidden = next !== "crypto";
+  if (forexPanel) forexPanel.hidden = next !== "forex";
+
+  document.querySelectorAll(".page-tab[data-page]").forEach((btn) => {
+    const active = btn.getAttribute("data-page") === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  const tagline = $("page-tagline");
+  if (tagline) {
+    tagline.textContent =
+      next === "forex"
+        ? "Forex markets — coming online"
+        : "Polymarket Chainlink TWAP candles only";
+  }
+
+  document.title =
+    next === "forex"
+      ? "Datafeed — Forex"
+      : "Datafeed — Polymarket TWAP";
+
+  if (location.hash.replace(/^#/, "") !== next) {
+    history.replaceState(null, "", `#${next}`);
+  }
+
+  if (next === "crypto" && state.chart) {
+    requestAnimationFrame(() => {
+      const el = $("chart");
+      if (!el) return;
+      state.chart.applyOptions({
+        width: el.clientWidth,
+        height: el.clientHeight,
+      });
+      drawSupportResistanceOverlay();
+    });
+  }
+}
+
+function pageFromHash() {
+  const hash = location.hash.replace(/^#/, "").toLowerCase();
+  return hash === "forex" ? "forex" : "crypto";
+}
+
 function wireControls() {
+  document.querySelectorAll("[data-page]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setPage(btn.getAttribute("data-page"));
+    });
+  });
+  window.addEventListener("hashchange", () => setPage(pageFromHash()));
+
   document.querySelectorAll("[data-pair]").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll("[data-pair]").forEach((b) => b.classList.remove("active"));
@@ -1477,6 +1535,7 @@ function connectWs() {
 async function boot() {
   initChart();
   wireControls();
+  setPage(pageFromHash());
   const metaRes = await fetch("/api/meta");
   state.meta = await metaRes.json();
   await loadSeries();
