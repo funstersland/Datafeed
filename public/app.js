@@ -32,9 +32,65 @@ function formatPrice(value) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 8 });
 }
 
+const POLYMARKET_TZ = "America/New_York";
+
+/**
+ * Lightweight Charts treats bar times as UTC for axis labels.
+ * Shift the unix second so the printed clock matches Polymarket ET
+ * (e.g. 12:45 UTC → shows as 8:45, same as "8:45AM ET" markets).
+ */
+function utcSecToEtChartTime(utcSec) {
+  const d = new Date(Number(utcSec) * 1000);
+  if (!Number.isFinite(d.getTime())) return utcSec;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: POLYMARKET_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(d)
+      .filter((p) => p.type !== "literal")
+      .map((p) => [p.type, p.value]),
+  );
+  let hour = Number(parts.hour);
+  if (hour === 24) hour = 0;
+  return Math.floor(
+    Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      hour,
+      Number(parts.minute),
+      Number(parts.second),
+    ) / 1000,
+  );
+}
+
+function formatEtLabel(msOrSec, { withDate = false } = {}) {
+  const ms = Number(msOrSec) > 1e12 ? Number(msOrSec) : Number(msOrSec) * 1000;
+  if (!Number.isFinite(ms)) return "—";
+  const opts = {
+    timeZone: POLYMARKET_TZ,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  };
+  if (withDate) {
+    opts.month = "short";
+    opts.day = "numeric";
+  }
+  return `${new Intl.DateTimeFormat("en-US", opts).format(new Date(ms))} ET`;
+}
+
 function toChartCandle(row) {
+  const utcSec = Math.floor(Number(row.openTimeMs) / 1000);
   return {
-    time: Math.floor(row.openTimeMs / 1000),
+    time: utcSecToEtChartTime(utcSec),
     open: Number(row.open),
     high: Number(row.high),
     low: Number(row.low),
@@ -107,6 +163,7 @@ function updateMetaCopy() {
     row.resolutionSource || "resolution source pending",
     row.marketSlug ? `market: ${row.marketSlug}` : null,
     twap,
+    "chart times ET",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -563,7 +620,7 @@ function formatPct(value) {
 const PAKISTAN_TZ = "Asia/Karachi";
 
 function formatTradeTime(ms) {
-  return new Date(ms).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+  return formatEtLabel(ms, { withDate: true });
 }
 
 /** Hour of day 0–23 in Pakistan Standard Time (Asia/Karachi). */
