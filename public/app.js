@@ -229,10 +229,11 @@ function findSupportResistanceLevels(
   let support = clusterLevels(lows, "below");
   let resistance = clusterLevels(highs, "above");
 
+  // Always try to keep at least one support/resistance near price (reference style).
   if (!support.length && lows.length) {
     const nearest = [...lows]
-      .filter((p) => p <= lastClose)
       .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
+      .filter((p) => p <= lastClose * 1.002)
       .slice(0, maxLevels);
     support = nearest.map((price) => ({
       price,
@@ -243,8 +244,8 @@ function findSupportResistanceLevels(
   }
   if (!resistance.length && highs.length) {
     const nearest = [...highs]
-      .filter((p) => p >= lastClose)
       .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
+      .filter((p) => p >= lastClose * 0.998)
       .slice(0, maxLevels);
     resistance = nearest.map((price) => ({
       price,
@@ -254,7 +255,19 @@ function findSupportResistanceLevels(
     }));
   }
 
-  return { support, resistance };
+  // Prefer the nearest level of each type for a clean chart like the reference.
+  const nearestOf = (levels) =>
+    [...levels]
+      .sort(
+        (a, b) =>
+          Math.abs(a.price - lastClose) - Math.abs(b.price - lastClose),
+      )
+      .slice(0, 1);
+
+  return {
+    support: nearestOf(support),
+    resistance: nearestOf(resistance),
+  };
 }
 
 function clearSupportResistanceLines() {
