@@ -179,9 +179,9 @@ function findSupportResistanceLevels(
     Number.isFinite(lastClose) && lastClose > 0
       ? lastClose * clusterPct
       : 0;
-  // Minimum painted band height (~0.12% of price), like the reference zones.
+  // Minimum painted band height (~0.28% of price), closer to the reference zones.
   const minHalfBand =
-    Number.isFinite(lastClose) && lastClose > 0 ? lastClose * 0.0012 : 0;
+    Number.isFinite(lastClose) && lastClose > 0 ? lastClose * 0.0028 : 0;
 
   const clusterLevels = (prices, prefer) => {
     if (!prices.length) return [];
@@ -255,14 +255,25 @@ function findSupportResistanceLevels(
     }));
   }
 
-  // Prefer the nearest level of each type for a clean chart like the reference.
-  const nearestOf = (levels) =>
-    [...levels]
+  // Prefer the nearest visible-ish level of each type (reference shows one S + one R).
+  const chartLow = Math.min(...candles.map((c) => Number(c.low)).filter(Number.isFinite));
+  const chartHigh = Math.max(...candles.map((c) => Number(c.high)).filter(Number.isFinite));
+  const inView = (lvl) =>
+    Number.isFinite(chartLow) &&
+    Number.isFinite(chartHigh) &&
+    lvl.price >= chartLow &&
+    lvl.price <= chartHigh;
+
+  const nearestOf = (levels) => {
+    const preferred = levels.filter(inView);
+    const pool = preferred.length ? preferred : levels;
+    return [...pool]
       .sort(
         (a, b) =>
           Math.abs(a.price - lastClose) - Math.abs(b.price - lastClose),
       )
       .slice(0, 1);
+  };
 
   return {
     support: nearestOf(support),
