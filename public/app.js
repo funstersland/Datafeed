@@ -10,6 +10,9 @@ const state = {
   meta: [],
   chart: null,
   series: null,
+  chartCandles: [],
+  srLines: [],
+  showSr: false,
 };
 
 const MAX_PNL_ROWS = 250;
@@ -121,9 +124,157 @@ async function loadSeries() {
   );
   const data = await res.json();
   const candles = (data.candles || []).map(toChartCandle);
+  state.chartCandles = candles;
   state.series.setData(candles);
   if (data.candles?.length) updateOhlc(data.candles[data.candles.length - 1]);
   state.chart.timeScale().fitContent();
+  refreshSupportResistance();
+}
+
+/**
+ * Swing high/low pivots → clustered support (lows) and resistance (highs).
+ */
+function findSupportResistanceLevels(
+  candles,
+  { pivot = 3, maxLevels = 4, clusterPct = 0.004 } = {},
+) {
+  if (!candles?.length || candles.length < pivot * 2 + 1) {
+    return { support: [], resistance: [] };
+  }
+
+  const highs = [];
+  const lows = [];
+  for (let i = pivot; i < candles.length - pivot; i += 1) {
+    const h = Number(candles[i].high);
+    const l = Number(candles[i].low);
+    if (![h, l].every(Number.isFinite)) continue;
+
+    let isHigh = true;
+    let isLow = true;
+    for (let j = 1; j <= pivot; j += 1) {
+      if (Number(candles[i - j].high) >= h || Number(candles[i + j].high) >= h) {
+        isHigh = false;
+      }
+      if (Number(candles[i - j].low) <= l || Number(candles[i + j].low) <= l) {
+        isLow = false;
+      }
+      if (!isHigh && !isLow) break;
+    }
+    if (isHigh) highs.push(h);
+    if (isLow) lows.push(l);
+  }
+
+  const lastClose = Number(candles[candles.length - 1].close);
+  const clusterTol =
+    Number.isFinite(lastClose) && lastClose > 0
+      ? lastClose * clusterPct
+      : 0;
+
+  const clusterLevels = (prices, prefer) => {
+    if (!prices.length) return [];
+    const sorted = [...prices].sort((a, b) => a - b);
+    const clusters = [];
+    let bucket = [sorted[0]];
+    for (let i = 1; i < sorted.length; i += 1) {
+      const p = sorted[i];
+      const center = bucket.reduce((s, x) => s + x, 0) / bucket.length;
+      if (Math.abs(p - center) <= clusterTol) {
+        bucket.push(p);
+      } else {
+        clusters.push(bucket);
+        bucket = [p];
+      }
+    }
+    clusters.push(bucket);
+
+    return clusters
+      .map((bucketPrices) => {
+        const avg =
+          bucketPrices.reduce((s, x) => s + x, 0) / bucketPrices.length;
+        return { price: avg, touches: bucketPrices.length };
+      })
+      .sort((a, b) => {
+        if (b.touches !== a.touches) return b.touches - a.touches;
+        // Prefer levels nearer current price when touch counts tie.
+        return (
+          Math.abs(a.price - lastClose) - Math.abs(b.price - lastClose)
+        );
+      })
+      .filter((lvl) =>
+        prefer === "below" ? lvl.price <= lastClose : lvl.price >= lastClose,
+      )
+      .slice(0, maxLevels)
+      .map((lvl) => lvl.price);
+  };
+
+  // Support: clustered swing lows at/below price. Resistance: swing highs at/above.
+  let support = clusterLevels(lows, "below");
+  let resistance = clusterLevels(highs, "above");
+
+  // If filters emptied a side (e.g. strong trend), fall back to nearest raw pivots.
+  if (!support.length && lows.length) {
+    support = [...lows]
+      .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
+      .filter((p) => p <= lastClose)
+      .slice(0, maxLevels);
+  }
+  if (!resistance.length && highs.length) {
+    resistance = [...highs]
+      .sort((a, b) => Math.abs(a - lastClose) - Math.abs(b - lastClose))
+      .filter((p) => p >= lastClose)
+      .slice(0, maxLevels);
+  }
+
+  return { support, resistance };
+}
+
+function clearSupportResistanceLines() {
+  if (!state.series || !state.srLines?.length) {
+    state.srLines = [];
+    return;
+  }
+  for (const line of state.srLines) {
+    try {
+      state.series.removePriceLine(line);
+    } catch {
+      // line may already be gone after series reset
+    }
+  }
+  state.srLines = [];
+}
+
+function refreshSupportResistance() {
+  clearSupportResistanceLines();
+  if (!state.showSr || !state.series || !state.chartCandles.length) return;
+
+  const { support, resistance } = findSupportResistanceLevels(
+    state.chartCandles,
+  );
+
+  for (const price of support) {
+    state.srLines.push(
+      state.series.createPriceLine({
+        price,
+        color: "#17c964",
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "S",
+      }),
+    );
+  }
+  for (const price of resistance) {
+    state.srLines.push(
+      state.series.createPriceLine({
+        price,
+        color: "#f31260",
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "R",
+      }),
+    );
+  }
 }
 
 function downloadChartData(format) {
@@ -1055,6 +1206,10 @@ function wireControls() {
   });
   $("download-csv").addEventListener("click", () => downloadChartData("csv"));
   $("download-json").addEventListener("click", () => downloadChartData("json"));
+  $("chart-sr").addEventListener("change", () => {
+    state.showSr = $("chart-sr").checked;
+    refreshSupportResistance();
+  });
   $("pnl-run").addEventListener("click", () => calculatePnl());
   $("pnl-cont3-entry").addEventListener("change", () => {
     if ($("pnl-cont3-entry").checked) $("pnl-martingale").checked = true;
@@ -1117,8 +1272,18 @@ function connectWs() {
     if (msg.type === "candle") {
       const c = msg.candle;
       if (c.pair !== state.pair || c.window !== state.window) return;
-      state.series.update(toChartCandle(c));
+      const chartCandle = toChartCandle(c);
+      state.series.update(chartCandle);
       updateOhlc(c);
+      const last = state.chartCandles[state.chartCandles.length - 1];
+      if (last && last.time === chartCandle.time) {
+        state.chartCandles[state.chartCandles.length - 1] = chartCandle;
+      } else if (!last || chartCandle.time > last.time) {
+        state.chartCandles.push(chartCandle);
+      }
+      if (state.showSr && (c.closed === true || c.closed === 1)) {
+        refreshSupportResistance();
+      }
     }
   });
 

@@ -134,6 +134,30 @@ main {
   margin-left: auto;
 }
 
+.chart-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid var(--line);
+  padding: 0.4rem 0.65rem;
+}
+
+.chart-check input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.chart-check:has(input:checked) {
+  color: var(--ink);
+  border-color: rgba(200, 245, 106, 0.45);
+  background: rgba(200, 245, 106, 0.08);
+}
+
 .chart-panel {
   background: var(--panel);
   border: 1px solid var(--line);
