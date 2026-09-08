@@ -140,6 +140,33 @@ function candleColor(candle) {
   return Number(candle.close) >= Number(candle.open) ? "green" : "red";
 }
 
+/** Doji: small body vs high-low range (wicks dominate). */
+function isDoji(candle, { maxBodyRatio = 0.25 } = {}) {
+  const open = Number(candle.open);
+  const close = Number(candle.close);
+  const high = Number(candle.high);
+  const low = Number(candle.low);
+  if (![open, close, high, low].every(Number.isFinite)) return false;
+  const body = Math.abs(close - open);
+  const range = high - low;
+  if (range <= 1e-12) return body <= 1e-12;
+  return body / range <= maxBodyRatio;
+}
+
+function isRedDoji(candle) {
+  return candleColor(candle) === "red" && isDoji(candle);
+}
+
+/** Net (close−open) over the lookback candles ending just before index. */
+function netCandlePull(candles, endIdx, lookback) {
+  const start = Math.max(0, endIdx - lookback);
+  let sum = 0;
+  for (let i = start; i < endIdx; i += 1) {
+    sum += Number(candles[i].close) - Number(candles[i].open);
+  }
+  return sum;
+}
+
 function formatMoney(value, { signed = true } = {}) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "—";
@@ -325,14 +352,14 @@ function summarizePakistanHours(trades, { topN = 3 } = {}) {
 /**
  * Color-follow strategy with optional martingale, continuation-3 entry,
  * 5-loss half-hour break, martingale cap (max 3 losses / no 4th double),
- * and RedDogi (5+ greens → red signal → bet red until green).
+ * and RedDogi (net upside pull → red doji → bet next red once → leave).
  *
  * Continuation entry: after 3 losses → wait for 2 same colors, trade the 3rd.
  * Half-hour break: after 5 losses → skip 30 minutes of candle time, then join
  * next continuation; another loss after resume → another half-hour break.
  * Martingale cap: after 3rd loss reset stake to base (no 8×); any win resets stake.
- * RedDogi: after 5+ continuous greens, a red candle is the signal (no bet);
- * then bet each following candle red until a green appears, then hunt again.
+ * RedDogi: when the last few candles are net upside (some reds OK), a red doji
+ * is the signal (no bet); bet the next candle red once, then leave and repeat.
  * Skipped rounds: Predict=skipped, Actual=real candle color.
  */
 function runColorFollowStrategy(
@@ -388,9 +415,9 @@ function runColorFollowStrategy(
   const useHalf5 = Boolean(halfHourBreak5);
   const useRedDogi = Boolean(redDogi);
   const useContinuationJoin = useCont3 || useHalf5;
-  // hunt | bet_red — only used when useRedDogi
+  // hunt | bet_once — only used when useRedDogi
   let dogiPhase = "hunt";
-  let dogiGreenStreak = 0;
+  const DOGI_LOOKBACK = 5;
 
   const emptyResult = (statusMessage) => ({
     trades: [],
@@ -431,10 +458,6 @@ function runColorFollowStrategy(
     return emptyResult(
       `Not Enough Candle Data — need at least 2 closed candles, have ${usable.length} (${haveLabel})`,
     );
-  }
-
-  if (useRedDogi) {
-    dogiGreenStreak = candleColor(usable[0]) === "green" ? 1 : 0;
   }
 
   const pushSkip = (cur) => {
@@ -486,16 +509,17 @@ function runColorFollowStrategy(
     if (useRedDogi) {
       if (dogiPhase === "hunt") {
         pushSkip(cur);
-        if (actual === "green") {
-          dogiGreenStreak += 1;
-        } else {
-          // Red candle after 5+ greens = RedDogi signal (no bet on signal).
-          if (dogiGreenStreak >= 5) dogiPhase = "bet_red";
-          dogiGreenStreak = 0;
+        // Red doji after a net-upside pull over the last few candles → arm one bet.
+        if (
+          i >= DOGI_LOOKBACK &&
+          isRedDoji(cur) &&
+          netCandlePull(usable, i, DOGI_LOOKBACK) > 0
+        ) {
+          dogiPhase = "bet_once";
         }
         continue;
       }
-      // dogiPhase === "bet_red" → place bet predicting red
+      // dogiPhase === "bet_once" → place a single bet predicting red
     } else {
       if (useHalf5 && skipMode === "wait_half_hour") {
         pushSkip(cur);
@@ -612,14 +636,8 @@ function runColorFollowStrategy(
     if (liquidated) break;
 
     if (useRedDogi) {
-      if (actual === "green") {
-        // Stop betting red; this green starts the next hunt streak.
-        dogiPhase = "hunt";
-        dogiGreenStreak = 1;
-      } else {
-        dogiGreenStreak = 0;
-        // stay in bet_red until green
-      }
+      // One bet only — leave the market and hunt the next upside→red-doji setup.
+      dogiPhase = "hunt";
       continue;
     }
 

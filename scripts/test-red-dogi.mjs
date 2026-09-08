@@ -1,24 +1,59 @@
 /**
- * RedDogi: after 5+ continuous greens then a red signal, bet red until green.
+ * RedDogi: net upside pull → red doji signal → bet next red once → leave → repeat.
  */
 
 function candleColor(candle) {
   return Number(candle.close) >= Number(candle.open) ? "green" : "red";
 }
 
-function c(color, t = 0) {
-  return color === "green"
-    ? { open: 1, close: 2, openTimeMs: t, closed: true }
-    : { open: 2, close: 1, openTimeMs: t, closed: true };
+function isDoji(candle, { maxBodyRatio = 0.25 } = {}) {
+  const open = Number(candle.open);
+  const close = Number(candle.close);
+  const high = Number(candle.high);
+  const low = Number(candle.low);
+  const body = Math.abs(close - open);
+  const range = high - low;
+  if (range <= 1e-12) return body <= 1e-12;
+  return body / range <= maxBodyRatio;
+}
+
+function isRedDoji(candle) {
+  return candleColor(candle) === "red" && isDoji(candle);
+}
+
+function netCandlePull(candles, endIdx, lookback) {
+  const start = Math.max(0, endIdx - lookback);
+  let sum = 0;
+  for (let i = start; i < endIdx; i += 1) {
+    sum += Number(candles[i].close) - Number(candles[i].open);
+  }
+  return sum;
+}
+
+function candle({ o, h, l, c, t = 0 }) {
+  return { open: o, high: h, low: l, close: c, openTimeMs: t, closed: true };
+}
+
+// Strong green (big body)
+function G(t, move = 10) {
+  return candle({ o: 100, h: 100 + move, l: 99, c: 100 + move, t });
+}
+// Red with large body (not doji)
+function R(t, move = 10) {
+  return candle({ o: 100, h: 101, l: 100 - move, c: 100 - move, t });
+}
+// Red doji: close slightly below open, long wicks
+function RD(t) {
+  return candle({ o: 100, h: 105, l: 95, c: 99.5, t });
 }
 
 function runRedDogi(candles, { baseStake = 1, payout = 2, capital = 100 } = {}) {
+  const LOOKBACK = 5;
   const usable = candles;
   const trades = [];
   let stake = baseStake;
   let balance = capital;
   let dogiPhase = "hunt";
-  let dogiGreenStreak = candleColor(usable[0]) === "green" ? 1 : 0;
   let wins = 0;
   let losses = 0;
 
@@ -27,101 +62,102 @@ function runRedDogi(candles, { baseStake = 1, payout = 2, capital = 100 } = {}) 
     const actual = candleColor(cur);
 
     if (dogiPhase === "hunt") {
-      trades.push({ skipped: true, actual, predicted: "skipped" });
-      if (actual === "green") dogiGreenStreak += 1;
-      else {
-        if (dogiGreenStreak >= 5) dogiPhase = "bet_red";
-        dogiGreenStreak = 0;
+      trades.push({ skipped: true, actual, predicted: "skipped", i });
+      if (
+        i >= LOOKBACK &&
+        isRedDoji(cur) &&
+        netCandlePull(usable, i, LOOKBACK) > 0
+      ) {
+        dogiPhase = "bet_once";
       }
       continue;
     }
 
     balance -= stake;
     const won = actual === "red";
-    let pnl = 0;
     if (won) {
-      const pay = stake * payout;
-      balance += pay;
-      pnl = pay - stake;
+      balance += stake * payout;
       wins += 1;
     } else {
-      pnl = -stake;
       losses += 1;
     }
-    trades.push({ skipped: false, predicted: "red", actual, won, stake, pnl, balance });
-
-    if (actual === "green") {
-      dogiPhase = "hunt";
-      dogiGreenStreak = 1;
-    } else {
-      dogiGreenStreak = 0;
-    }
+    trades.push({
+      skipped: false,
+      predicted: "red",
+      actual,
+      won,
+      stake,
+      balance,
+      i,
+    });
+    dogiPhase = "hunt";
   }
 
-  return { trades, wins, losses, balance, dogiPhase };
+  return { trades, wins, losses, balance };
 }
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
-// 5 greens then red signal then R,R,G — should bet on the two reds and lose on green
+assert(isRedDoji(RD(0)), "RD is red doji");
+assert(!isDoji(R(0)), "large red is not doji");
+assert(!isRedDoji(G(0)), "green is not red doji");
+
+// Upside pull (5 greens) → red doji → bet once on next (red win) → leave
 {
   const candles = [
-    c("green", 0),
-    c("green", 1),
-    c("green", 2),
-    c("green", 3),
-    c("green", 4), // 5th green (index 0..4)
-    c("red", 5), // signal
-    c("red", 6), // bet win
-    c("red", 7), // bet win
-    c("green", 8), // bet loss → stop
-    c("green", 9),
+    G(0),
+    G(1),
+    G(2),
+    G(3),
+    G(4), // lookback net upside
+    RD(5), // signal
+    R(6), // bet — win
+    G(7),
+    G(8),
   ];
   const r = runRedDogi(candles);
   const real = r.trades.filter((t) => !t.skipped);
-  assert(real.length === 3, `expected 3 bets, got ${real.length}`);
-  assert(real[0].won && real[0].actual === "red", "first bet win red");
-  assert(real[1].won && real[1].actual === "red", "second bet win red");
-  assert(!real[2].won && real[2].actual === "green", "third bet loss green");
-  assert(r.wins === 2 && r.losses === 1, "2W 1L");
+  assert(real.length === 1, `expected 1 bet, got ${real.length}`);
+  assert(real[0].won && real[0].i === 6, "bet on candle after doji");
+  assert(r.wins === 1 && r.losses === 0, "1W");
 }
 
-// Only 4 greens then red — no signal, no bets
+// Upside with mixed reds still nets up → red doji → bet
 {
   const candles = [
-    c("green", 0),
-    c("green", 1),
-    c("green", 2),
-    c("green", 3),
-    c("red", 4),
-    c("red", 5),
-    c("red", 6),
+    G(0, 20),
+    R(1, 5),
+    G(2, 20),
+    R(3, 5),
+    G(4, 20),
+    RD(5),
+    G(6), // bet — loss (green)
+    RD(7), // not enough new upside yet / may or may not arm
   ];
+  const pull = netCandlePull(candles, 5, 5);
+  assert(pull > 0, `expected upside pull, got ${pull}`);
   const r = runRedDogi(candles);
   const real = r.trades.filter((t) => !t.skipped);
-  assert(real.length === 0, "no bets without 5 greens");
+  assert(real.length >= 1, "at least one bet");
+  assert(real[0].i === 6 && !real[0].won, "first bet is loss on green");
 }
 
-// 6 greens then red — still signals
+// No upside (all red) → red doji should NOT arm
 {
-  const candles = [
-    c("green", 0),
-    c("green", 1),
-    c("green", 2),
-    c("green", 3),
-    c("green", 4),
-    c("green", 5),
-    c("red", 6), // signal
-    c("red", 7), // bet
-    c("green", 8),
-  ];
+  const candles = [R(0), R(1), R(2), R(3), R(4), RD(5), R(6), R(7)];
   const r = runRedDogi(candles);
   const real = r.trades.filter((t) => !t.skipped);
-  assert(real.length === 2, `expected 2 bets, got ${real.length}`);
-  assert(real[0].won, "win");
-  assert(!real[1].won, "loss on green");
+  assert(real.length === 0, "no bet without upside pull");
 }
 
-console.log("ok: RedDogi");
+// Large red (not doji) after upside — no signal
+{
+  const candles = [G(0), G(1), G(2), G(3), G(4), R(5, 20), R(6), R(7)];
+  const r = runRedDogi(candles);
+  const real = r.trades.filter((t) => !t.skipped);
+  assert(real.length === 0, "no bet without doji");
+}
+
+console.log("ok: RedDogi upside+doji");
