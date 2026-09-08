@@ -134,6 +134,40 @@ main {
   margin-left: auto;
 }
 
+.chart-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid rgba(200, 245, 106, 0.35);
+  padding: 0.4rem 0.65rem;
+  background: rgba(200, 245, 106, 0.06);
+}
+
+.chart-check input {
+  accent-color: var(--accent);
+  margin: 0;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.chart-check:has(input:checked) {
+  color: #11180f;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.chart-meta-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
 .chart-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -171,9 +205,24 @@ main {
   white-space: pre-line;
 }
 
-.chart {
+.chart-wrap {
+  position: relative;
   width: 100%;
   height: min(62vh, 560px);
+}
+
+.chart {
+  width: 100%;
+  height: 100%;
+}
+
+.chart-sr-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .footnote {
@@ -493,11 +542,15 @@ main {
     flex-direction: column;
   }
 
+  .chart-meta-right {
+    align-items: flex-start;
+  }
+
   .ohlc {
     text-align: left;
   }
 
-  .chart {
+  .chart-wrap {
     height: 52vh;
   }
 
