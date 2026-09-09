@@ -1383,10 +1383,15 @@ function setPage(page) {
 
   const tagline = $("page-tagline");
   if (tagline) {
-    tagline.textContent =
-      next === "forex"
-        ? "Forex markets — coming online"
-        : "Polymarket Chainlink TWAP candles only";
+    if (next === "forex") {
+      const forex = state.settings?.forexFeed;
+      tagline.textContent =
+        forex === "custom" && state.settings?.forexFeedUrl
+          ? `Custom forex feed · ${state.settings.forexFeedUrl}`
+          : "Forex markets — coming online";
+    } else {
+      applyFeedSettings();
+    }
   }
 
   document.title =
