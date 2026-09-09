@@ -16,6 +16,19 @@ const state = {
   srZones: [],
   srOverlay: null,
   showSr: false,
+  settings: null,
+};
+
+const SETTINGS_KEY = "datafeed.settings.v1";
+
+const DEFAULT_SETTINGS = {
+  apiKey: "",
+  apiSecret: "",
+  apiPassphrase: "",
+  cryptoFeed: "polymarket-twap",
+  cryptoFeedUrl: "",
+  forexFeed: "none",
+  forexFeedUrl: "",
 };
 
 const MAX_PNL_ROWS = 250;
@@ -1403,7 +1416,117 @@ function pageFromHash() {
   return hash === "forex" ? "forex" : "crypto";
 }
 
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_SETTINGS, ...parsed };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings(next) {
+  state.settings = { ...DEFAULT_SETTINGS, ...next };
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+  return state.settings;
+}
+
+function fillSettingsForm(settings) {
+  const s = settings || state.settings || DEFAULT_SETTINGS;
+  $("settings-api-key").value = s.apiKey || "";
+  $("settings-api-secret").value = s.apiSecret || "";
+  $("settings-api-passphrase").value = s.apiPassphrase || "";
+  $("settings-crypto-feed").value = s.cryptoFeed || "polymarket-twap";
+  $("settings-crypto-url").value = s.cryptoFeedUrl || "";
+  $("settings-forex-feed").value = s.forexFeed || "none";
+  $("settings-forex-url").value = s.forexFeedUrl || "";
+}
+
+function readSettingsForm() {
+  return {
+    apiKey: $("settings-api-key").value.trim(),
+    apiSecret: $("settings-api-secret").value.trim(),
+    apiPassphrase: $("settings-api-passphrase").value.trim(),
+    cryptoFeed: $("settings-crypto-feed").value,
+    cryptoFeedUrl: $("settings-crypto-url").value.trim(),
+    forexFeed: $("settings-forex-feed").value,
+    forexFeedUrl: $("settings-forex-url").value.trim(),
+  };
+}
+
+function setSettingsTab(tab) {
+  const next = ["api", "crypto", "forex"].includes(tab) ? tab : "api";
+  document.querySelectorAll("[data-settings-tab]").forEach((btn) => {
+    const active = btn.getAttribute("data-settings-tab") === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+    panel.hidden = panel.getAttribute("data-settings-panel") !== next;
+  });
+}
+
+function openSettings(tab = "api") {
+  const modal = $("settings-modal");
+  if (!modal) return;
+  fillSettingsForm(state.settings);
+  setSettingsTab(tab);
+  $("settings-saved").textContent = "";
+  modal.hidden = false;
+  $("settings-open")?.setAttribute("aria-expanded", "true");
+  document.body.style.overflow = "hidden";
+}
+
+function closeSettings() {
+  const modal = $("settings-modal");
+  if (!modal) return;
+  modal.hidden = true;
+  $("settings-open")?.setAttribute("aria-expanded", "false");
+  document.body.style.overflow = "";
+}
+
+function wireSettings() {
+  state.settings = loadSettings();
+
+  $("settings-open")?.addEventListener("click", () => openSettings("api"));
+  document.querySelectorAll("[data-settings-close]").forEach((el) => {
+    el.addEventListener("click", () => closeSettings());
+  });
+  document.querySelectorAll("[data-settings-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setSettingsTab(btn.getAttribute("data-settings-tab"));
+    });
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !$("settings-modal")?.hidden) closeSettings();
+  });
+
+  $("settings-form")?.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    saveSettings(readSettingsForm());
+    const note = $("settings-saved");
+    if (note) note.textContent = "Saved";
+    applyFeedSettings();
+  });
+
+  applyFeedSettings();
+}
+
+function applyFeedSettings() {
+  const s = state.settings || DEFAULT_SETTINGS;
+  const tag = $("page-tagline");
+  if (!tag || state.page !== "crypto") return;
+  if (s.cryptoFeed === "custom" && s.cryptoFeedUrl) {
+    tag.textContent = `Custom crypto feed · ${s.cryptoFeedUrl}`;
+  } else {
+    tag.textContent = "Polymarket Chainlink TWAP candles only";
+  }
+}
+
 function wireControls() {
+  wireSettings();
   document.querySelectorAll("[data-page]").forEach((btn) => {
     btn.addEventListener("click", () => {
       setPage(btn.getAttribute("data-page"));
