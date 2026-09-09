@@ -55,8 +55,9 @@ async function refreshLatestPolymarketCandles(): Promise<void> {
     for (const window of WINDOWS) {
       if (!windowSupportsPolymarketCandles(window)) continue;
       try {
-        // One latest page closes gaps created while earlier pairs were seeding.
-        await seedShortWindowHistory(pair, window, 1);
+        // A few latest pages close gaps created while RTDS was stalled.
+        const n = await seedShortWindowHistory(pair, window, 3);
+        console.log(`[seed] refresh ${pair} ${window}: upserted ${n}`);
       } catch (err) {
         console.error(`[seed] refresh ${pair} ${window} failed`, err);
       }
@@ -122,7 +123,20 @@ async function main(): Promise<void> {
   });
 
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, service: "Datafeed", source: "polymarket-only" });
+    const lastTickAtMs = feed.getLastTickAtMs();
+    const now = Date.now();
+    const tickAgeMs = lastTickAtMs ? now - lastTickAtMs : null;
+    res.json({
+      ok: true,
+      service: "Datafeed",
+      source: "polymarket-only",
+      rtds: {
+        lastTickAtMs: lastTickAtMs || null,
+        tickAgeMs,
+        healthy: tickAgeMs != null && tickAgeMs < 90_000,
+      },
+      stats: getStats(),
+    });
   });
 
   app.get("/api/stats", (_req, res) => {
@@ -282,6 +296,25 @@ async function main(): Promise<void> {
       console.error("[meta] refresh failed", err),
     );
   }, 5 * 60_000);
+
+  // Safety net: if RTDS stalls, REST candle pages still advance the chart.
+  setInterval(() => {
+    refreshLatestPolymarketCandles()
+      .then(() => {
+        for (const pair of PAIRS) {
+          for (const window of WINDOWS) {
+            const latest = getCandles(pair, window, 1)[0];
+            if (latest) broadcast({ type: "candle", candle: latest });
+          }
+        }
+        const lastTickAtMs = feed.getLastTickAtMs();
+        const tickAgeMs = lastTickAtMs ? Date.now() - lastTickAtMs : null;
+        console.log(
+          `[seed] periodic refresh ok (rtds age ${tickAgeMs == null ? "n/a" : `${Math.round(tickAgeMs / 1000)}s`})`,
+        );
+      })
+      .catch((err) => console.error("[seed] periodic refresh failed", err));
+  }, 60_000);
 
   const shutdown = () => {
     feed.stop();
