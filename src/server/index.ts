@@ -55,8 +55,9 @@ async function refreshLatestPolymarketCandles(): Promise<void> {
     for (const window of WINDOWS) {
       if (!windowSupportsPolymarketCandles(window)) continue;
       try {
-        // One latest page closes gaps created while earlier pairs were seeding.
-        await seedShortWindowHistory(pair, window, 1);
+        // A few latest pages close gaps created while RTDS was stalled.
+        const n = await seedShortWindowHistory(pair, window, 3);
+        console.log(`[seed] refresh ${pair} ${window}: upserted ${n}`);
       } catch (err) {
         console.error(`[seed] refresh ${pair} ${window} failed`, err);
       }
