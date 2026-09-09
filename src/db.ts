@@ -207,6 +207,22 @@ export function getLatestCandle(
     .get(pair, window) as CandleRow | undefined;
 }
 
+export function getCandle(
+  pair: Pair,
+  window: Window,
+  openTimeMs: number,
+): CandleRow | undefined {
+  return getDb()
+    .prepare(
+      `SELECT pair, window, open_time_ms AS openTimeMs, open, high, low, close,
+              tick_count AS tickCount, closed, source, updated_at_ms AS updatedAtMs
+       FROM candles
+       WHERE pair = ? AND window = ? AND open_time_ms = ?
+       LIMIT 1`,
+    )
+    .get(pair, window, openTimeMs) as CandleRow | undefined;
+}
+
 export function upsertMarketMeta(row: MarketMetaRow): void {
   getDb()
     .prepare(

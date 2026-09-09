@@ -8,6 +8,13 @@ import {
 } from "../db.js";
 
 export type CandleUpdateHandler = (candle: CandleRow) => void;
+export type CandleGapHandler = (gap: {
+  pair: Pair;
+  window: Window;
+  fromOpenMs: number;
+  toOpenMs: number;
+  skippedBuckets: number;
+}) => void;
 
 function compareDecimal(a: string, b: string): number {
   return Number(a) - Number(b);
@@ -51,10 +58,15 @@ export function candleOpenTimeMs(observedAtMs: number, window: Window): number {
 
 export class CandleEngine {
   private readonly onUpdate: CandleUpdateHandler;
+  private readonly onGap: CandleGapHandler;
   private readonly open: Map<string, CandleRow> = new Map();
 
-  constructor(onUpdate: CandleUpdateHandler) {
+  constructor(
+    onUpdate: CandleUpdateHandler,
+    onGap?: CandleGapHandler,
+  ) {
     this.onUpdate = onUpdate;
+    this.onGap = onGap ?? (() => undefined);
   }
 
   private key(pair: Pair, window: Window): string {
@@ -72,6 +84,19 @@ export class CandleEngine {
 
     if (!current || current.openTimeMs !== openTimeMs) {
       if (current && current.openTimeMs < openTimeMs) {
+        const step = WINDOW_SECONDS[window] * 1000;
+        const skippedBuckets = Math.floor(
+          (openTimeMs - current.openTimeMs) / step,
+        ) - 1;
+        if (skippedBuckets > 0) {
+          this.onGap({
+            pair: tick.pair,
+            window,
+            fromOpenMs: current.openTimeMs + step,
+            toOpenMs: openTimeMs,
+            skippedBuckets,
+          });
+        }
         current = { ...current, closed: 1, updatedAtMs: Date.now() };
         upsertCandle(current);
         this.onUpdate(current);

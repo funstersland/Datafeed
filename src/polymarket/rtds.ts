@@ -14,11 +14,15 @@ const SYMBOL_TO_PAIR = new Map(
   PAIRS.map((pair) => [PAIR_META[pair].rtdsSymbol, pair] as const),
 );
 
-/** Force reconnect if no TWAP update arrives within this window. */
-const STALE_MS = 45_000;
+/**
+ * TWAP updates arrive about once per second per symbol. Treat silence longer
+ * than this as a stalled socket and force reconnect + REST gap fill.
+ */
+const STALE_MS = 12_000;
+const WATCHDOG_MS = 3_000;
 const PING_MS = 5_000;
-const MIN_RECONNECT_MS = 1_000;
-const MAX_RECONNECT_MS = 30_000;
+const MIN_RECONNECT_MS = 500;
+const MAX_RECONNECT_MS = 15_000;
 
 function normalizeSymbol(symbol: string): string {
   return symbol.trim().toLowerCase();
@@ -35,15 +39,24 @@ export class PolymarketTwapFeed {
   private connectionId = 0;
   private lastTickAtMs = 0;
   private lastMessageAtMs = 0;
+  private everConnected = false;
   private readonly onTick: TwapUpdateHandler;
   private readonly onStatus: (status: string) => void;
+  private readonly onStale: (ageMs: number) => void;
+  private readonly onReconnect: (reason: string) => void;
 
   constructor(handlers: {
     onTick: TwapUpdateHandler;
     onStatus?: (status: string) => void;
+    /** Fired when the socket is considered stale (before reconnect). */
+    onStale?: (ageMs: number) => void;
+    /** Fired after a successful (re)connect and subscribe. */
+    onReconnect?: (reason: string) => void;
   }) {
     this.onTick = handlers.onTick;
     this.onStatus = handlers.onStatus ?? (() => undefined);
+    this.onStale = handlers.onStale ?? (() => undefined);
+    this.onReconnect = handlers.onReconnect ?? (() => undefined);
   }
 
   start(): void {
@@ -77,6 +90,10 @@ export class PolymarketTwapFeed {
     if (!ws) return;
     try {
       ws.removeAllListeners();
+    } catch {
+      // ignore
+    }
+    try {
       if (
         ws.readyState === WebSocket.OPEN ||
         ws.readyState === WebSocket.CONNECTING
@@ -129,7 +146,12 @@ export class PolymarketTwapFeed {
       }, PING_MS);
       this.watchdogTimer = setInterval(() => {
         this.checkWatchdog(connectionId);
-      }, 10_000);
+      }, WATCHDOG_MS);
+
+      if (this.everConnected || reason !== "start") {
+        this.onReconnect(reason);
+      }
+      this.everConnected = true;
     });
 
     ws.on("message", (raw) => {
@@ -170,10 +192,10 @@ export class PolymarketTwapFeed {
     // Prefer tick freshness once we've received at least one update.
     const anchor = this.lastTickAtMs || this.lastMessageAtMs;
     if (!anchor) return;
-    if (now - anchor < STALE_MS) return;
-    this.onStatus(
-      `stale:${Math.round((now - anchor) / 1000)}s — forcing reconnect`,
-    );
+    const ageMs = now - anchor;
+    if (ageMs < STALE_MS) return;
+    this.onStatus(`stale:${Math.round(ageMs / 1000)}s — forcing reconnect`);
+    this.onStale(ageMs);
     this.scheduleReconnect("stale");
   }
 
