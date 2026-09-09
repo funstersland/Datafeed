@@ -5,7 +5,7 @@ import {
   type Pair,
   type Window,
 } from "../config.js";
-import { upsertCandle, type CandleRow } from "../db.js";
+import { getCandle, upsertCandle, type CandleRow } from "../db.js";
 
 export type PolymarketCandle = {
   time: number; // unix seconds
@@ -104,16 +104,29 @@ export async function seedShortWindowHistory(
     for (const c of candles) {
       if (seen.has(c.time)) continue;
       seen.add(c.time);
+      const openTimeMs = c.time * 1000;
+      const closed =
+        Date.now() >= (c.time + (window === "5m" ? 300 : 900)) * 1000 ? 1 : 0;
+      const existing = getCandle(pair, window, openTimeMs);
+      // Never wipe a live RTDS bucket that already has ticks.
+      if (
+        existing &&
+        existing.closed === 0 &&
+        existing.tickCount > 0 &&
+        (existing.source.includes("rtds") || existing.source.includes("twap"))
+      ) {
+        continue;
+      }
       const row: CandleRow = {
         pair,
         window,
-        openTimeMs: c.time * 1000,
+        openTimeMs,
         open: String(c.open),
         high: String(c.high),
         low: String(c.low),
         close: String(c.close),
         tickCount: 0,
-        closed: Date.now() >= (c.time + (window === "5m" ? 300 : 900)) * 1000 ? 1 : 0,
+        closed,
         source: "polymarket-chainlink-candles",
         updatedAtMs: Date.now(),
       };

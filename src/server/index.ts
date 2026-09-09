@@ -9,6 +9,11 @@ import {
   CandleEngine,
 } from "../candles/engine.js";
 import {
+  countOpenGaps,
+  fillAllCandleGaps,
+  type GapFillResult,
+} from "../candles/gapFill.js";
+import {
   HOST,
   PAIRS,
   PORT,
@@ -34,6 +39,11 @@ import { PolymarketTwapFeed } from "../polymarket/rtds.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "../../public");
 
+/** How often we poll Polymarket REST to close any candle gaps. */
+const GAP_FILL_INTERVAL_MS = 15_000;
+/** RTDS tick age above this is reported unhealthy. */
+const HEALTHY_TICK_AGE_MS = 20_000;
+
 type PublicMarketMeta = Omit<MarketMetaRow, "rawJson">;
 
 type ClientMsg =
@@ -50,26 +60,47 @@ function isWindow(v: string): v is Window {
   return (WINDOWS as readonly string[]).includes(v);
 }
 
-async function refreshLatestPolymarketCandles(): Promise<void> {
+function summarizeGapResults(results: GapFillResult[]): string {
+  const filled = results.reduce((n, r) => n + Math.max(0, r.filled), 0);
+  const missing = results.reduce(
+    (n, r) => n + Math.max(0, r.missingBefore),
+    0,
+  );
+  return `filled ${filled} (had ${missing} missing)`;
+}
+
+async function refreshLatestPolymarketCandles(): Promise<GapFillResult[]> {
+  // Prefer explicit gap detection + fill; also pull a couple latest pages
+  // so recently closed buckets get official OHLC.
+  const gapResults = await fillAllCandleGaps({
+    lookbackMs: 6 * 60 * 60 * 1000,
+    maxPages: 6,
+  });
+
   for (const pair of PAIRS) {
     for (const window of WINDOWS) {
       if (!windowSupportsPolymarketCandles(window)) continue;
       try {
-        // A few latest pages close gaps created while RTDS was stalled.
-        const n = await seedShortWindowHistory(pair, window, 3);
-        console.log(`[seed] refresh ${pair} ${window}: upserted ${n}`);
+        const n = await seedShortWindowHistory(pair, window, 2);
+        if (n > 0) {
+          console.log(`[seed] refresh ${pair} ${window}: upserted ${n}`);
+        }
       } catch (err) {
         console.error(`[seed] refresh ${pair} ${window} failed`, err);
       }
     }
     aggregateHigherTimeframesFromFiveMinute(pair);
   }
+
+  return gapResults;
 }
 
 async function seedIfNeeded(): Promise<void> {
   const stats = getStats();
   if (stats.candles > 0) {
-    console.log(`[seed] existing candles=${stats.candles}, refreshing latest Polymarket pages`);
+    console.log(
+      `[seed] existing candles=${stats.candles}, refreshing latest Polymarket pages`,
+    );
     await refreshLatestPolymarketCandles();
     return;
   }
@@ -101,6 +132,10 @@ async function main(): Promise<void> {
   const wss = new WebSocketServer({ server, path: "/ws" });
   const clients = new Set<WebSocket>();
 
+  let gapFillInFlight: Promise<void> | null = null;
+  let lastGapFillAtMs = 0;
+  let lastGapFillSummary = "idle";
+
   const broadcast = (msg: ClientMsg) => {
     const raw = JSON.stringify(msg);
     for (const client of clients) {
@@ -108,9 +143,50 @@ async function main(): Promise<void> {
     }
   };
 
-  const engine = new CandleEngine((candle) => {
-    broadcast({ type: "candle", candle });
-  });
+  const broadcastLatestCandles = () => {
+    for (const pair of PAIRS) {
+      for (const window of WINDOWS) {
+        const latest = getCandles(pair, window, 3);
+        for (const candle of latest) {
+          broadcast({ type: "candle", candle });
+        }
+      }
+    }
+  };
+
+  const runGapFill = (reason: string): Promise<void> => {
+    if (gapFillInFlight) return gapFillInFlight;
+    gapFillInFlight = (async () => {
+      try {
+        const results = await refreshLatestPolymarketCandles();
+        lastGapFillAtMs = Date.now();
+        lastGapFillSummary = `${reason}: ${summarizeGapResults(results)}`;
+        const remaining = countOpenGaps(PAIRS, 2 * 60 * 60 * 1000);
+        console.log(
+          `[gap] ${lastGapFillSummary}; remaining(2h)=${remaining.total}`,
+        );
+        broadcastLatestCandles();
+      } catch (err) {
+        console.error(`[gap] ${reason} failed`, err);
+        lastGapFillSummary = `${reason}: failed`;
+      } finally {
+        gapFillInFlight = null;
+      }
+    })();
+    return gapFillInFlight;
+  };
+
+  const engine = new CandleEngine(
+    (candle) => {
+      broadcast({ type: "candle", candle });
+    },
+    (gap) => {
+      console.log(
+        `[gap] tick jump ${gap.pair} ${gap.window}: skipped ${gap.skippedBuckets} bucket(s)`,
+      );
+      void runGapFill(`tick-jump:${gap.pair}:${gap.window}`);
+    },
+  );
 
   const feed = new PolymarketTwapFeed({
     onStatus: (status) => {
@@ -120,12 +196,21 @@ async function main(): Promise<void> {
     onTick: (tick) => {
       engine.applyTick(tick);
     },
+    onStale: (ageMs) => {
+      console.log(`[rtds] stale ${Math.round(ageMs / 1000)}s — gap fill`);
+      void runGapFill("rtds-stale");
+    },
+    onReconnect: (reason) => {
+      console.log(`[rtds] reconnected (${reason}) — gap fill`);
+      void runGapFill(`rtds-reconnect:${reason}`);
+    },
   });
 
   app.get("/api/health", (_req, res) => {
     const lastTickAtMs = feed.getLastTickAtMs();
     const now = Date.now();
     const tickAgeMs = lastTickAtMs ? now - lastTickAtMs : null;
+    const gaps = countOpenGaps(PAIRS, 2 * 60 * 60 * 1000);
     res.json({
       ok: true,
       service: "Datafeed",
@@ -133,7 +218,14 @@ async function main(): Promise<void> {
       rtds: {
         lastTickAtMs: lastTickAtMs || null,
         tickAgeMs,
-        healthy: tickAgeMs != null && tickAgeMs < 90_000,
+        healthy: tickAgeMs != null && tickAgeMs < HEALTHY_TICK_AGE_MS,
+      },
+      gaps: {
+        lookbackHours: 2,
+        missingCandles: gaps.total,
+        bySeries: gaps.bySeries,
+        lastFillAtMs: lastGapFillAtMs || null,
+        lastFillSummary: lastGapFillSummary,
       },
       stats: getStats(),
     });
@@ -297,24 +389,16 @@ async function main(): Promise<void> {
     );
   }, 5 * 60_000);
 
-  // Safety net: if RTDS stalls, REST candle pages still advance the chart.
+  // Continuous safety net: catch gaps within ~one candle even if RTDS looks up.
   setInterval(() => {
-    refreshLatestPolymarketCandles()
-      .then(() => {
-        for (const pair of PAIRS) {
-          for (const window of WINDOWS) {
-            const latest = getCandles(pair, window, 1)[0];
-            if (latest) broadcast({ type: "candle", candle: latest });
-          }
-        }
-        const lastTickAtMs = feed.getLastTickAtMs();
-        const tickAgeMs = lastTickAtMs ? Date.now() - lastTickAtMs : null;
-        console.log(
-          `[seed] periodic refresh ok (rtds age ${tickAgeMs == null ? "n/a" : `${Math.round(tickAgeMs / 1000)}s`})`,
-        );
-      })
-      .catch((err) => console.error("[seed] periodic refresh failed", err));
-  }, 60_000);
+    const lastTickAtMs = feed.getLastTickAtMs();
+    const tickAgeMs = lastTickAtMs ? Date.now() - lastTickAtMs : null;
+    void runGapFill("periodic").then(() => {
+      console.log(
+        `[gap] periodic ok (rtds age ${tickAgeMs == null ? "n/a" : `${Math.round(tickAgeMs / 1000)}s`})`,
+      );
+    });
+  }, GAP_FILL_INTERVAL_MS);
 
   const shutdown = () => {
     feed.stop();
