@@ -7,6 +7,7 @@ import {
   type Window,
 } from "../config.js";
 import { upsertCandle, type CandleRow } from "../db.js";
+import { deleteRtdsCandles } from "../db.js";
 import { polymarketAuthHeaders } from "./credentials.js";
 
 export type PolymarketCandle = {
@@ -18,9 +19,12 @@ export type PolymarketCandle = {
 };
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, {
+  const bust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
+  const res = await fetch(`${url}${bust}`, {
     headers: {
       Accept: "application/json",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
       "User-Agent": "Datafeed/1.0 (Polymarket-REST)",
       Referer: `${POLYMARKET.site}/`,
       ...polymarketAuthHeaders(),
@@ -148,6 +152,9 @@ export async function seedShortWindowHistory(
     if (candles.length < 30) break;
     await new Promise((r) => setTimeout(r, 80));
   }
+
+  // Drop any leftover Chainlink RTDS rows so REST tip is authoritative.
+  deleteRtdsCandles(pair, window);
 
   return imported;
 }

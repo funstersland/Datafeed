@@ -106,12 +106,12 @@ export class HourlyRestSyncScheduler {
   }
 
   start(): void {
-    void this.run("startup", 20);
+    void this.run("startup", 12);
     this.hourlyTimer = setInterval(() => {
-      void this.run("hourly", 16);
+      void this.run("hourly", 12);
     }, HOURLY_SYNC_MS);
     this.latestTimer = setInterval(() => {
-      void this.run("latest", 3);
+      void this.run("latest", 4);
     }, LATEST_SYNC_MS);
   }
 

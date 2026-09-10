@@ -44,7 +44,10 @@ export function findMissingOpenTimes(
 ): number[] {
   const now = Date.now();
   const fromMs = now - lookbackMs;
-  const expected = expectedOpenTimes(window, fromMs, now);
+  // Exclude the still-open bucket — Polymarket may not publish it yet.
+  const throughMs = alignOpenMs(now, window) - stepMs(window);
+  if (throughMs < alignOpenMs(fromMs, window)) return [];
+  const expected = expectedOpenTimes(window, fromMs, throughMs);
   if (!expected.length) return [];
 
   const existing = new Set(
