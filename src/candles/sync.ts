@@ -101,6 +101,10 @@ export class HourlyRestSyncScheduler {
     return this.lastResult;
   }
 
+  isRunning(): boolean {
+    return this.inFlight != null;
+  }
+
   start(): void {
     void this.run("startup", 20);
     this.hourlyTimer = setInterval(() => {

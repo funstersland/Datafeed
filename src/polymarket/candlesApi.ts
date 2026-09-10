@@ -6,7 +6,7 @@ import {
   type RestCandleWindow,
   type Window,
 } from "../config.js";
-import { getCandle, upsertCandle, type CandleRow } from "../db.js";
+import { upsertCandle, type CandleRow } from "../db.js";
 import { polymarketAuthHeaders } from "./credentials.js";
 
 export type PolymarketCandle = {
@@ -121,15 +121,6 @@ export async function seedShortWindowHistory(
       const openTimeMs = c.time * 1000;
       const closed =
         Date.now() >= (c.time + durationSeconds(window)) * 1000 ? 1 : 0;
-      const existing = getCandle(pair, window, openTimeMs);
-      if (
-        existing &&
-        existing.closed === 0 &&
-        existing.tickCount > 0 &&
-        (existing.source.includes("rtds") || existing.source.includes("twap"))
-      ) {
-        continue;
-      }
       const row: CandleRow = {
         pair,
         window,

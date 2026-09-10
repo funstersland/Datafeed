@@ -102,12 +102,15 @@ async function main(): Promise<void> {
         mode: "hourly-rest",
         hourlyIntervalMs: HOURLY_SYNC_MS,
         latestIntervalMs: LATEST_SYNC_MS,
+        running: sync.isRunning(),
         lastReason: last?.reason ?? null,
         lastFinishedAtMs: last?.finishedAtMs ?? null,
         lastAgeMs: ageMs,
         lastImported: last?.imported ?? null,
         lastAggregated: last?.aggregated ?? null,
-        healthy: ageMs != null && ageMs < HOURLY_SYNC_MS + 10 * 60_000,
+        healthy:
+          sync.isRunning() ||
+          (ageMs != null && ageMs < HOURLY_SYNC_MS + 10 * 60_000),
       },
       credentials: {
         configured: creds.configured,

@@ -86,14 +86,7 @@ export function importChainlinkCandlePreservingLive(
 ): "inserted" | "updated" | "skipped-live" {
   const row = toRow(pair, window, c);
   const existing = getCandle(pair, window, row.openTimeMs);
-  if (
-    existing &&
-    existing.closed === 0 &&
-    existing.tickCount > 0 &&
-    (existing.source.includes("rtds") || existing.source.includes("twap"))
-  ) {
-    return "skipped-live";
-  }
+  // REST-only mode: always upsert Polymarket official OHLC.
   upsertCandle(row);
   return existing ? "updated" : "inserted";
 }
