@@ -306,9 +306,9 @@
             <label class="pnl-check">
               <input id="pnl-martingale-reset-break" type="checkbox" />
               <span>
-                Martingale reset to base + break after multi-color (junk) repeat ends — when a
-                losing multi-color run of at least N losses ends, reset stake to base and skip for
-                M minutes (candle time), then resume
+                Martingale reset to base + break after multi-color (junk) — after N consecutive
+                losses (no more than N in a row), reset stake to base and skip for M minutes
+                (candle time), then resume
               </span>
             </label>
             <div class="pnl-check-params">
@@ -320,7 +320,7 @@
                   min="1"
                   step="1"
                   placeholder="losses"
-                  aria-label="Min losses in multi-color run before reset and break"
+                  aria-label="Max consecutive losses before reset and break"
                 />
               </label>
               <label class="pnl-param">
@@ -331,7 +331,7 @@
                   min="1"
                   step="1"
                   placeholder="minutes"
-                  aria-label="Break length in minutes after junk ends"
+                  aria-label="Break length in minutes after N losses"
                 />
               </label>
             </div>
