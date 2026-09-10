@@ -5,6 +5,7 @@ import {
   REST_CANDLE_WINDOWS,
   type Pair,
 } from "../config.js";
+import { deleteRtdsCandles } from "../db.js";
 import { aggregateHigherTimeframesFromFiveMinute } from "./engine.js";
 import { seedShortWindowHistory } from "../polymarket/candlesApi.js";
 import { credentialsStatus } from "../polymarket/credentials.js";
@@ -61,6 +62,9 @@ export async function syncPolymarketRestCandles(options: {
         options.onLog?.(
           `[sync] ${pair} ${window} failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+      } finally {
+        // Always strip leftover RTDS tips even if a fetch failed mid-run.
+        deleteRtdsCandles(pair, window);
       }
     }
     const agg = aggregateHigherTimeframesFromFiveMinute(pair);

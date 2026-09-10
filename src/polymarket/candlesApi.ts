@@ -6,8 +6,7 @@ import {
   type RestCandleWindow,
   type Window,
 } from "../config.js";
-import { upsertCandle, type CandleRow } from "../db.js";
-import { deleteRtdsCandles } from "../db.js";
+import { deleteRtdsCandles, upsertCandle, type CandleRow } from "../db.js";
 import { polymarketAuthHeaders } from "./credentials.js";
 
 export type PolymarketCandle = {
@@ -19,8 +18,7 @@ export type PolymarketCandle = {
 };
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const bust = url.includes("?") ? `&_=${Date.now()}` : `?_=${Date.now()}`;
-  const res = await fetch(`${url}${bust}`, {
+  const res = await fetch(url, {
     headers: {
       Accept: "application/json",
       "Cache-Control": "no-cache",
