@@ -706,8 +706,8 @@ function summarizePakistanHours(trades, { topN = 3 } = {}) {
  * Continuation entry: after 3 losses → wait for 2 same colors, trade the 3rd.
  * Half-hour break: after 5 losses → skip 30 minutes of candle time, then join
  * next continuation; another loss after resume → another half-hour break.
- * Martingale reset+break: after N consecutive losses → reset stake to base and
- * skip M minutes of candle time, then resume normal color-follow.
+ * Martingale reset+break: after a multi-color (junk) losing run of N+ losses
+ * ends (first win), reset stake to base and skip M minutes of candle time.
  * Martingale cap: after 3rd loss reset stake to base (no 8×); any win resets stake.
  * RedDogi: when the last few candles are net upside (some reds OK), a red doji
  * is the signal (no bet); bet the next candle red once, then leave and repeat.
@@ -994,6 +994,7 @@ function runColorFollowStrategy(
       balance += payoutReturned;
       pnl = payoutReturned - tradeStake;
       wins += 1;
+      const junkLossRun = consecutiveLosses;
       consecutiveLosses = 0;
       if (martingale) {
         if (useCap3) {
@@ -1013,6 +1014,10 @@ function runColorFollowStrategy(
       } else {
         resumeArmed = false;
         halfHourArmed = false;
+      }
+      // Multi-color (junk) repeat ended on this win after N+ losses → reset + break.
+      if (useResetBreak && junkLossRun >= resetLossThreshold) {
+        enterResetBreak(cur);
       }
     } else {
       payoutReturned = 0;
@@ -1070,11 +1075,12 @@ function runColorFollowStrategy(
       continue;
     }
 
+    // Reset+break is entered on the win that ends a multi-color junk run (above).
+    if (useResetBreak && skipMode === "wait_reset_break") {
+      continue;
+    }
+
     if (!won) {
-      if (useResetBreak && consecutiveLosses >= resetLossThreshold) {
-        enterResetBreak(cur);
-        continue;
-      }
       if (useHalf5 && (consecutiveLosses >= 5 || halfHourArmed)) {
         // 5 consecutive losses, or the next loss after rejoining ("6th") → 30m break.
         enterHalfHourBreak(cur);
@@ -1238,7 +1244,7 @@ function renderPnlSummary(result) {
         result.martingale ? "Martingale" : "Flat stake",
         result.martingaleCap3 ? "cap@3" : null,
         result.martingaleResetBreak
-          ? `reset+break@${result.resetBreakLosses}/${result.resetBreakMinutes}m`
+          ? `reset+break after junk@${result.resetBreakLosses}/${result.resetBreakMinutes}m`
           : null,
         result.cont3Entry ? "cont-3 entry" : null,
         result.halfHourBreak5 ? "5-loss 30m break" : null,

@@ -1,6 +1,6 @@
 /**
- * Martingale reset-to-base + break: after N losses, stake resets and skip M minutes.
- * Mirrors the wait_reset_break path in public/app.js.
+ * Martingale reset+break after multi-color (junk) repeat ends:
+ * N+ losses (alternating colors), then a win ends junk → reset stake + skip M minutes.
  */
 
 function candleColor(c) {
@@ -52,6 +52,7 @@ function run(candles, opts) {
     const won = predicted === actual;
     if (won) {
       balance += tradeStake * payout;
+      const junkLossRun = consec;
       consec = 0;
       if (martingale) stake = baseStake;
       trades.push({
@@ -60,6 +61,13 @@ function run(candles, opts) {
         stake: tradeStake,
         openTimeMs: cur.openTimeMs,
       });
+      // Junk (multi-color) repeat ended after N+ losses → reset + break.
+      if (martingaleResetBreak && junkLossRun >= resetBreakLosses) {
+        skipMode = "wait_reset_break";
+        breakUntil = cur.openTimeMs + breakMs;
+        stake = baseStake;
+        consec = 0;
+      }
     } else {
       consec += 1;
       if (martingale) stake = tradeStake * 2;
@@ -69,12 +77,6 @@ function run(candles, opts) {
         stake: tradeStake,
         openTimeMs: cur.openTimeMs,
       });
-      if (martingaleResetBreak && consec >= resetBreakLosses) {
-        skipMode = "wait_reset_break";
-        breakUntil = cur.openTimeMs + breakMs;
-        stake = baseStake;
-        consec = 0;
-      }
     }
   }
   return trades;
@@ -86,11 +88,26 @@ function c(ms, open, close) {
 
 const STEP = 5 * 60 * 1000;
 const t0 = Date.UTC(2026, 2, 9, 12, 0, 0);
-// Alternating colors → every trade loses for color-follow (predict prev).
-const candles = [];
-for (let i = 0; i < 20; i += 1) {
-  const green = i % 2 === 0;
-  candles.push(c(t0 + i * STEP, green ? 100 : 110, green ? 110 : 100));
+
+/**
+ * Build: 3 losses (R/G/R/G alternating from green start) then a same-color win
+ * that ends the multi-color junk, then enough candles for a 15m break.
+ *
+ * i=0 green, i=1 red → trade1 loss
+ * i=2 green → trade2 loss
+ * i=3 red → trade3 loss
+ * i=4 red → trade4 win (junk ends) → break
+ */
+const candles = [
+  c(t0 + 0 * STEP, 100, 110), // green
+  c(t0 + 1 * STEP, 110, 100), // red  loss
+  c(t0 + 2 * STEP, 100, 110), // green loss
+  c(t0 + 3 * STEP, 110, 100), // red  loss
+  c(t0 + 4 * STEP, 100, 90), // red  win — junk ends
+];
+for (let i = 5; i < 20; i += 1) {
+  // continue red streak during break / resume
+  candles.push(c(t0 + i * STEP, 100, 90));
 }
 
 let failed = 0;
@@ -108,13 +125,14 @@ const trades = run(candles, {
 const real = trades.filter((x) => !x.skipped);
 const skips = trades.filter((x) => x.skipped);
 
-assert(real.length >= 3, `placed real trades got ${real.length}`);
-assert(real[0].stake === 1, `first stake 1 got ${real[0].stake}`);
-assert(real[1].stake === 2, `second stake 2 got ${real[1].stake}`);
-assert(real[2].stake === 4, `third stake 4 got ${real[2].stake}`);
-assert(skips.length >= 3, `break skips for 15m of 5m candles, got ${skips.length}`);
+assert(real.length >= 4, `placed real trades got ${real.length}`);
+assert(real[0].won === false && real[0].stake === 1, "loss1 stake 1");
+assert(real[1].won === false && real[1].stake === 2, "loss2 stake 2");
+assert(real[2].won === false && real[2].stake === 4, "loss3 stake 4");
+assert(real[3].won === true, "junk ends on win");
+assert(skips.length >= 3, `break skips after junk ends, got ${skips.length}`);
 
-const afterBreak = real[3];
+const afterBreak = real[4];
 assert(afterBreak, "resumed after break");
 assert(
   afterBreak.stake === 1,
@@ -125,4 +143,4 @@ if (failed) {
   console.error(`${failed} failed`);
   process.exit(1);
 }
-console.log("martingale reset+break checks passed");
+console.log("martingale reset+break (junk ends) checks passed");
