@@ -697,7 +697,8 @@ function summarizePakistanHours(trades, { topN = 3 } = {}) {
 
 /**
  * Color-follow strategy with optional martingale, continuation-3 entry,
- * 5-loss half-hour break, martingale cap (max 3 losses / no 4th double),
+ * 5-loss half-hour break, configurable martingale reset+break (N losses / M minutes),
+ * martingale cap (max 3 losses / no 4th double),
  * RedDogi (net upside pull → red doji → bet next red once → leave),
  * Red-2 entry (after 1 red → bet next red → wait for green → repeat),
  * and Green-2 entry (after 1 green → bet next green → wait for red → repeat).
@@ -705,6 +706,8 @@ function summarizePakistanHours(trades, { topN = 3 } = {}) {
  * Continuation entry: after 3 losses → wait for 2 same colors, trade the 3rd.
  * Half-hour break: after 5 losses → skip 30 minutes of candle time, then join
  * next continuation; another loss after resume → another half-hour break.
+ * Martingale reset+break: after N consecutive losses in a multi-color (junk)
+ * run, reset stake to base and skip M minutes — never more than N losses in a row.
  * Martingale cap: after 3rd loss reset stake to base (no 8×); any win resets stake.
  * RedDogi: when the last few candles are net upside (some reds OK), a red doji
  * is the signal (no bet); bet the next candle red once, then leave and repeat.
@@ -725,12 +728,21 @@ function runColorFollowStrategy(
     cont3Entry = false,
     martingaleCap3 = false,
     halfHourBreak5 = false,
+    martingaleResetBreak = false,
+    resetBreakLosses = 5,
+    resetBreakMinutes = 30,
     redDogi = false,
     red2Entry = false,
     green2Entry = false,
   },
 ) {
   const HALF_HOUR_MS = 30 * 60 * 1000;
+  const resetLossThreshold = Math.max(
+    1,
+    Math.floor(Number(resetBreakLosses) || 5),
+  );
+  const resetBreakMs =
+    Math.max(1, Math.floor(Number(resetBreakMinutes) || 30)) * 60 * 1000;
   const closed = candles.filter((c) => c.closed === true || c.closed === 1);
   const usable = closed.length >= 2 ? closed : candles;
   const requested = Number.isFinite(candlesRequested)
@@ -756,7 +768,7 @@ function runColorFollowStrategy(
   let liquidatedReason = null;
   let stopReason = "completed";
   let consecutiveLosses = 0;
-  // null | "wait_half_hour" | "wait_two_same" | "wait_third"
+  // null | "wait_half_hour" | "wait_reset_break" | "wait_two_same" | "wait_third"
   let skipMode = null;
   let streakColor = null;
   let breakUntilMs = 0;
@@ -766,6 +778,7 @@ function runColorFollowStrategy(
   const useCont3 = Boolean(cont3Entry);
   const useCap3 = Boolean(martingaleCap3);
   const useHalf5 = Boolean(halfHourBreak5);
+  const useResetBreak = Boolean(martingaleResetBreak);
   const useRed2 = Boolean(red2Entry);
   const useGreen2 = Boolean(green2Entry) && !useRed2;
   const useColor2 = useRed2 || useGreen2;
@@ -806,6 +819,9 @@ function runColorFollowStrategy(
     cont3Entry: useCont3,
     martingaleCap3: useCap3,
     halfHourBreak5: useHalf5,
+    martingaleResetBreak: useResetBreak,
+    resetBreakLosses: resetLossThreshold,
+    resetBreakMinutes: resetBreakMs / 60_000,
     redDogi: useRedDogi,
     red2Entry: useRed2,
     green2Entry: useGreen2,
@@ -860,6 +876,18 @@ function runColorFollowStrategy(
     resumeArmed = false;
   };
 
+  const enterResetBreak = (cur) => {
+    breakUntilMs = Number(cur.openTimeMs) + resetBreakMs;
+    skipMode = "wait_reset_break";
+    streakColor = null;
+    consecutiveLosses = 0;
+    unrecoveredLoss = 0;
+    stake = baseStake;
+    resumeArmed = false;
+    halfHourArmed = false;
+    pendingJoinFromHalfHour = false;
+  };
+
   for (let i = 1; i < usable.length; i += 1) {
     const prev = usable[i - 1];
     const cur = usable[i];
@@ -900,6 +928,17 @@ function runColorFollowStrategy(
       }
       // dogiPhase === "bet_once" → place a single bet predicting red
     } else {
+      if (useResetBreak && skipMode === "wait_reset_break") {
+        pushSkip(cur);
+        if (Number(cur.openTimeMs) >= breakUntilMs) {
+          skipMode = null;
+          stake = baseStake;
+          unrecoveredLoss = 0;
+          consecutiveLosses = 0;
+        }
+        continue;
+      }
+
       if (useHalf5 && skipMode === "wait_half_hour") {
         pushSkip(cur);
         if (Number(cur.openTimeMs) >= breakUntilMs) {
@@ -986,6 +1025,9 @@ function runColorFollowStrategy(
           stake = baseStake;
           unrecoveredLoss = 0;
           // keep consecutiveLosses so half-hour filter can still reach 5
+        } else if (useResetBreak && consecutiveLosses >= resetLossThreshold) {
+          // Cap this junk run: next stake is base after the break, not another double.
+          stake = baseStake;
         } else {
           stake = tradeStake * 2;
         }
@@ -1032,6 +1074,11 @@ function runColorFollowStrategy(
     }
 
     if (!won) {
+      // After N consecutive losses in multi-color junk → reset to base + M minute break.
+      if (useResetBreak && consecutiveLosses >= resetLossThreshold) {
+        enterResetBreak(cur);
+        continue;
+      }
       if (useHalf5 && (consecutiveLosses >= 5 || halfHourArmed)) {
         // 5 consecutive losses, or the next loss after rejoining ("6th") → 30m break.
         enterHalfHourBreak(cur);
@@ -1095,6 +1142,9 @@ function runColorFollowStrategy(
     cont3Entry: useCont3,
     martingaleCap3: useCap3,
     halfHourBreak5: useHalf5,
+    martingaleResetBreak: useResetBreak,
+    resetBreakLosses: resetLossThreshold,
+    resetBreakMinutes: resetBreakMs / 60_000,
     redDogi: useRedDogi,
     red2Entry: useRed2,
     green2Entry: useGreen2,
@@ -1191,6 +1241,9 @@ function renderPnlSummary(result) {
       [
         result.martingale ? "Martingale" : "Flat stake",
         result.martingaleCap3 ? "cap@3" : null,
+        result.martingaleResetBreak
+          ? `reset+break@${result.resetBreakLosses}losses/${result.resetBreakMinutes}m`
+          : null,
         result.cont3Entry ? "cont-3 entry" : null,
         result.halfHourBreak5 ? "5-loss 30m break" : null,
         result.redDogi ? "RedDogi" : null,
@@ -1268,6 +1321,17 @@ async function calculatePnl() {
   const cont3Entry = $("pnl-cont3-entry").checked;
   const martingaleCap3 = $("pnl-martingale-cap3").checked;
   const halfHourBreak5 = $("pnl-halfhour-5").checked;
+  const martingaleResetBreak = Boolean(
+    $("pnl-martingale-reset-break")?.checked,
+  );
+  const resetBreakLosses = Math.max(
+    1,
+    Math.floor(Number($("pnl-reset-break-losses")?.value) || 5),
+  );
+  const resetBreakMinutes = Math.max(
+    1,
+    Math.floor(Number($("pnl-reset-break-minutes")?.value) || 30),
+  );
   const redDogi = $("pnl-red-dogi").checked;
   const red2Entry = $("pnl-red2-entry").checked;
   const green2Entry = $("pnl-green2-entry").checked;
@@ -1277,6 +1341,7 @@ async function calculatePnl() {
     (cont3Entry ||
       martingaleCap3 ||
       halfHourBreak5 ||
+      martingaleResetBreak ||
       red2Entry ||
       green2Entry) &&
     !martingale
@@ -1341,6 +1406,7 @@ async function calculatePnl() {
         cont3Entry ||
         martingaleCap3 ||
         halfHourBreak5 ||
+        martingaleResetBreak ||
         red2Entry ||
         green2Entry ||
         $("pnl-martingale").checked,
@@ -1350,6 +1416,9 @@ async function calculatePnl() {
       cont3Entry,
       martingaleCap3,
       halfHourBreak5,
+      martingaleResetBreak,
+      resetBreakLosses,
+      resetBreakMinutes,
       redDogi,
       red2Entry,
       green2Entry,
@@ -1600,6 +1669,11 @@ function wireControls() {
   });
   $("pnl-martingale-cap3").addEventListener("change", () => {
     if ($("pnl-martingale-cap3").checked) $("pnl-martingale").checked = true;
+  });
+  $("pnl-martingale-reset-break")?.addEventListener("change", () => {
+    if ($("pnl-martingale-reset-break").checked) {
+      $("pnl-martingale").checked = true;
+    }
   });
   $("pnl-halfhour-5").addEventListener("change", () => {
     if ($("pnl-halfhour-5").checked) $("pnl-martingale").checked = true;
