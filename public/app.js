@@ -49,6 +49,28 @@ function formatPrice(value) {
 const POLYMARKET_TZ = "America/New_York";
 
 /**
+ * Hours (0–23, America/New_York) with the most multi-color / junk on 5m candles
+ * across BTC/SOL/ETH/HYPE/XRP/DOGE (highest ≥3 flip runs).
+ * 6–10, 12–13, 15 ET.
+ */
+const JUNKY_HOURS_ET = Object.freeze([6, 7, 8, 9, 10, 12, 13, 15]);
+const JUNKY_HOUR_SET_ET = new Set(JUNKY_HOURS_ET);
+
+/** Hour of day 0–23 in Polymarket Eastern Time. */
+function etHour(ms) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: POLYMARKET_TZ,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(new Date(ms));
+  const hour = Number(parts.find((p) => p.type === "hour")?.value);
+  return Number.isFinite(hour) ? hour % 24 : 0;
+}
+
+function isJunkyHourEt(ms) {
+  return JUNKY_HOUR_SET_ET.has(etHour(ms));
+}
+/**
  * Lightweight Charts treats bar times as UTC for axis labels.
  * Shift the unix second so the printed clock matches Polymarket ET
  * (e.g. 12:45 UTC → shows as 8:45, same as "8:45AM ET" markets).
@@ -706,8 +728,9 @@ function summarizePakistanHours(trades, { topN = 3 } = {}) {
  * Continuation entry: after 3 losses → wait for 2 same colors, trade the 3rd.
  * Half-hour break: after 5 losses → skip 30 minutes of candle time, then join
  * next continuation; another loss after resume → another half-hour break.
- * Martingale reset+break: after N consecutive losses in a multi-color (junk)
- * run, reset stake to base and skip M minutes — never more than N losses in a row.
+ * Skip junky hours: do not place trades during high multi-color ET hours
+ * (6–10, 12–13, 15 America/New_York); candle is recorded as skipped.
+ *
  * Martingale cap: after 3rd loss reset stake to base (no 8×); any win resets stake.
  * RedDogi: when the last few candles are net upside (some reds OK), a red doji
  * is the signal (no bet); bet the next candle red once, then leave and repeat.
@@ -731,6 +754,7 @@ function runColorFollowStrategy(
     martingaleResetBreak = false,
     resetBreakLosses = 5,
     resetBreakMinutes = 30,
+    skipJunkyHours = false,
     redDogi = false,
     red2Entry = false,
     green2Entry = false,
@@ -779,6 +803,7 @@ function runColorFollowStrategy(
   const useCap3 = Boolean(martingaleCap3);
   const useHalf5 = Boolean(halfHourBreak5);
   const useResetBreak = Boolean(martingaleResetBreak);
+  const useSkipJunk = Boolean(skipJunkyHours);
   const useRed2 = Boolean(red2Entry);
   const useGreen2 = Boolean(green2Entry) && !useRed2;
   const useColor2 = useRed2 || useGreen2;
@@ -822,6 +847,8 @@ function runColorFollowStrategy(
     martingaleResetBreak: useResetBreak,
     resetBreakLosses: resetLossThreshold,
     resetBreakMinutes: resetBreakMs / 60_000,
+    skipJunkyHours: useSkipJunk,
+    junkyHoursEt: useSkipJunk ? [...JUNKY_HOURS_ET] : [],
     redDogi: useRedDogi,
     red2Entry: useRed2,
     green2Entry: useGreen2,
@@ -969,6 +996,18 @@ function runColorFollowStrategy(
           resumeArmed = true;
         }
       }
+    }
+
+    // Skip known multi-color / junk ET hours — no bet, stake unchanged.
+    if (useSkipJunk && isJunkyHourEt(cur.openTimeMs)) {
+      pushSkip(cur);
+      if (useColor2) {
+        color2Phase =
+          actual === color2Opposite ? "wait_signal" : "wait_opposite";
+      } else if (useRedDogi) {
+        dogiPhase = "hunt";
+      }
+      continue;
     }
 
     const predicted = useColor2
@@ -1145,6 +1184,8 @@ function runColorFollowStrategy(
     martingaleResetBreak: useResetBreak,
     resetBreakLosses: resetLossThreshold,
     resetBreakMinutes: resetBreakMs / 60_000,
+    skipJunkyHours: useSkipJunk,
+    junkyHoursEt: useSkipJunk ? [...JUNKY_HOURS_ET] : [],
     redDogi: useRedDogi,
     red2Entry: useRed2,
     green2Entry: useGreen2,
@@ -1244,6 +1285,9 @@ function renderPnlSummary(result) {
         result.martingaleResetBreak
           ? `reset+break@${result.resetBreakLosses}losses/${result.resetBreakMinutes}m`
           : null,
+        result.skipJunkyHours
+          ? `skip junk hours ET [${(result.junkyHoursEt || JUNKY_HOURS_ET).join(",")}]`
+          : null,
         result.cont3Entry ? "cont-3 entry" : null,
         result.halfHourBreak5 ? "5-loss 30m break" : null,
         result.redDogi ? "RedDogi" : null,
@@ -1335,6 +1379,7 @@ async function calculatePnl() {
   const redDogi = $("pnl-red-dogi").checked;
   const red2Entry = $("pnl-red2-entry").checked;
   const green2Entry = $("pnl-green2-entry").checked;
+  const skipJunkyHours = Boolean($("pnl-skip-junky-hours")?.checked);
   $("pnl-limit").value = String(limit);
 
   if (
@@ -1419,6 +1464,7 @@ async function calculatePnl() {
       martingaleResetBreak,
       resetBreakLosses,
       resetBreakMinutes,
+      skipJunkyHours,
       redDogi,
       red2Entry,
       green2Entry,
