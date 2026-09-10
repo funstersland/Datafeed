@@ -223,6 +223,33 @@ export function getCandle(
     .get(pair, window, openTimeMs) as CandleRow | undefined;
 }
 
+/** Remove leftover live-RTDS candles once REST is the source of truth. */
+export function deleteRtdsCandles(pair: Pair, window: Window): number {
+  const result = getDb()
+    .prepare(
+      `DELETE FROM candles
+       WHERE pair = ? AND window = ?
+         AND (source LIKE '%rtds%' OR source LIKE '%twap-rtds%')`,
+    )
+    .run(pair, window);
+  return result.changes;
+}
+
+/** Delete candles strictly newer than `maxOpenTimeMs` (stale tip cleanup). */
+export function deleteCandlesNewerThan(
+  pair: Pair,
+  window: Window,
+  maxOpenTimeMs: number,
+): number {
+  const result = getDb()
+    .prepare(
+      `DELETE FROM candles
+       WHERE pair = ? AND window = ? AND open_time_ms > ?`,
+    )
+    .run(pair, window, maxOpenTimeMs);
+  return result.changes;
+}
+
 export function upsertMarketMeta(row: MarketMetaRow): void {
   getDb()
     .prepare(

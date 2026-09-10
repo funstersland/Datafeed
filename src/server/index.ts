@@ -4,17 +4,12 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import {
-  aggregateHigherTimeframesFromFiveMinute,
-  CandleEngine,
-} from "../candles/engine.js";
-import {
-  countOpenGaps,
-  fillAllCandleGaps,
-  type GapFillResult,
-} from "../candles/gapFill.js";
+import { countOpenGaps } from "../candles/gapFill.js";
+import { HourlyRestSyncScheduler } from "../candles/sync.js";
 import {
   HOST,
+  HOURLY_SYNC_MS,
+  LATEST_SYNC_MS,
   PAIRS,
   PORT,
   WINDOWS,
@@ -30,19 +25,13 @@ import {
   type MarketMetaRow,
 } from "../db.js";
 import {
-  seedShortWindowHistory,
-  windowSupportsPolymarketCandles,
-} from "../polymarket/candlesApi.js";
+  credentialsStatus,
+  setPolymarketCredentials,
+} from "../polymarket/credentials.js";
 import { refreshMarketMetadata } from "../polymarket/markets.js";
-import { PolymarketTwapFeed } from "../polymarket/rtds.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "../../public");
-
-/** How often we poll Polymarket REST to close any candle gaps. */
-const GAP_FILL_INTERVAL_MS = 15_000;
-/** RTDS tick age above this is reported unhealthy. */
-const HEALTHY_TICK_AGE_MS = 20_000;
 
 type PublicMarketMeta = Omit<MarketMetaRow, "rawJson">;
 
@@ -60,81 +49,15 @@ function isWindow(v: string): v is Window {
   return (WINDOWS as readonly string[]).includes(v);
 }
 
-function summarizeGapResults(results: GapFillResult[]): string {
-  const filled = results.reduce((n, r) => n + Math.max(0, r.filled), 0);
-  const missing = results.reduce(
-    (n, r) => n + Math.max(0, r.missingBefore),
-    0,
-  );
-  return `filled ${filled} (had ${missing} missing)`;
-}
-
-async function refreshLatestPolymarketCandles(): Promise<GapFillResult[]> {
-  // Prefer explicit gap detection + fill; also pull a couple latest pages
-  // so recently closed buckets get official OHLC.
-  const gapResults = await fillAllCandleGaps({
-    lookbackMs: 6 * 60 * 60 * 1000,
-    maxPages: 6,
-  });
-
-  for (const pair of PAIRS) {
-    for (const window of WINDOWS) {
-      if (!windowSupportsPolymarketCandles(window)) continue;
-      try {
-        const n = await seedShortWindowHistory(pair, window, 2);
-        if (n > 0) {
-          console.log(`[seed] refresh ${pair} ${window}: upserted ${n}`);
-        }
-      } catch (err) {
-        console.error(`[seed] refresh ${pair} ${window} failed`, err);
-      }
-    }
-    aggregateHigherTimeframesFromFiveMinute(pair);
-  }
-
-  return gapResults;
-}
-
-async function seedIfNeeded(): Promise<void> {
-  const stats = getStats();
-  if (stats.candles > 0) {
-    console.log(
-      `[seed] existing candles=${stats.candles}, refreshing latest Polymarket pages`,
-    );
-    await refreshLatestPolymarketCandles();
-    return;
-  }
-
-  console.log("[seed] importing Polymarket Chainlink TWAP candles (5m/15m)...");
-  for (const pair of PAIRS) {
-    for (const window of WINDOWS) {
-      if (!windowSupportsPolymarketCandles(window)) continue;
-      try {
-        // 15 pages * 30 = up to 450 candles per series from Polymarket.
-        const n = await seedShortWindowHistory(pair, window, 15);
-        console.log(`[seed] ${pair} ${window}: imported ${n}`);
-      } catch (err) {
-        console.error(`[seed] ${pair} ${window} failed`, err);
-      }
-    }
-    const agg = aggregateHigherTimeframesFromFiveMinute(pair);
-    console.log(`[seed] ${pair} aggregated 1h/1d candles: ${agg}`);
-  }
-  await refreshLatestPolymarketCandles();
-}
-
 async function main(): Promise<void> {
   getDb();
   fs.mkdirSync(publicDir, { recursive: true });
 
   const app = express();
+  app.use(express.json({ limit: "32kb" }));
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
   const clients = new Set<WebSocket>();
-
-  let gapFillInFlight: Promise<void> | null = null;
-  let lastGapFillAtMs = 0;
-  let lastGapFillSummary = "idle";
 
   const broadcast = (msg: ClientMsg) => {
     const raw = JSON.stringify(msg);
@@ -154,81 +77,93 @@ async function main(): Promise<void> {
     }
   };
 
-  const runGapFill = (reason: string): Promise<void> => {
-    if (gapFillInFlight) return gapFillInFlight;
-    gapFillInFlight = (async () => {
-      try {
-        const results = await refreshLatestPolymarketCandles();
-        lastGapFillAtMs = Date.now();
-        lastGapFillSummary = `${reason}: ${summarizeGapResults(results)}`;
-        const remaining = countOpenGaps(PAIRS, 2 * 60 * 60 * 1000);
-        console.log(
-          `[gap] ${lastGapFillSummary}; remaining(2h)=${remaining.total}`,
-        );
-        broadcastLatestCandles();
-      } catch (err) {
-        console.error(`[gap] ${reason} failed`, err);
-        lastGapFillSummary = `${reason}: failed`;
-      } finally {
-        gapFillInFlight = null;
-      }
-    })();
-    return gapFillInFlight;
-  };
-
-  const engine = new CandleEngine(
-    (candle) => {
-      broadcast({ type: "candle", candle });
-    },
-    (gap) => {
-      console.log(
-        `[gap] tick jump ${gap.pair} ${gap.window}: skipped ${gap.skippedBuckets} bucket(s)`,
-      );
-      void runGapFill(`tick-jump:${gap.pair}:${gap.window}`);
-    },
-  );
-
-  const feed = new PolymarketTwapFeed({
-    onStatus: (status) => {
-      console.log(`[rtds] ${status}`);
-      broadcast({ type: "status", status });
-    },
-    onTick: (tick) => {
-      engine.applyTick(tick);
-    },
-    onStale: (ageMs) => {
-      console.log(`[rtds] stale ${Math.round(ageMs / 1000)}s — gap fill`);
-      void runGapFill("rtds-stale");
-    },
-    onReconnect: (reason) => {
-      console.log(`[rtds] reconnected (${reason}) — gap fill`);
-      void runGapFill(`rtds-reconnect:${reason}`);
+  const sync = new HourlyRestSyncScheduler({
+    onLog: (msg) => console.log(msg),
+    onComplete: (result) => {
+      broadcast({
+        type: "status",
+        status: `rest-sync:${result.reason}:imported=${result.imported}`,
+      });
+      broadcastLatestCandles();
     },
   });
 
   app.get("/api/health", (_req, res) => {
-    const lastTickAtMs = feed.getLastTickAtMs();
-    const now = Date.now();
-    const tickAgeMs = lastTickAtMs ? now - lastTickAtMs : null;
+    const last = sync.getLastResult();
     const gaps = countOpenGaps(PAIRS, 2 * 60 * 60 * 1000);
+    const creds = credentialsStatus();
+    const ageMs = last ? Date.now() - last.finishedAtMs : null;
     res.json({
       ok: true,
       service: "Datafeed",
-      source: "polymarket-only",
-      rtds: {
-        lastTickAtMs: lastTickAtMs || null,
-        tickAgeMs,
-        healthy: tickAgeMs != null && tickAgeMs < HEALTHY_TICK_AGE_MS,
+      source: "polymarket-rest-hourly",
+      chainlinkRtds: "disconnected",
+      sync: {
+        mode: "hourly-rest",
+        hourlyIntervalMs: HOURLY_SYNC_MS,
+        latestIntervalMs: LATEST_SYNC_MS,
+        running: sync.isRunning(),
+        lastReason: last?.reason ?? null,
+        lastFinishedAtMs: last?.finishedAtMs ?? null,
+        lastAgeMs: ageMs,
+        lastImported: last?.imported ?? null,
+        lastAggregated: last?.aggregated ?? null,
+        healthy:
+          sync.isRunning() ||
+          (ageMs != null && ageMs < HOURLY_SYNC_MS + 10 * 60_000),
+      },
+      credentials: {
+        configured: creds.configured,
+        source: creds.source,
+        hasApiKey: creds.hasApiKey,
+        hasApiSecret: creds.hasApiSecret,
+        hasApiPassphrase: creds.hasApiPassphrase,
       },
       gaps: {
         lookbackHours: 2,
         missingCandles: gaps.total,
         bySeries: gaps.bySeries,
-        lastFillAtMs: lastGapFillAtMs || null,
-        lastFillSummary: lastGapFillSummary,
       },
       stats: getStats(),
     });
+  });
+
+  app.get("/api/credentials", (_req, res) => {
+    res.json(credentialsStatus());
+  });
+
+  app.post("/api/credentials", (req, res) => {
+    const body = (req.body ?? {}) as {
+      apiKey?: string;
+      apiSecret?: string;
+      apiPassphrase?: string;
+    };
+    const saved = setPolymarketCredentials({
+      apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
+      apiSecret: typeof body.apiSecret === "string" ? body.apiSecret : undefined,
+      apiPassphrase:
+        typeof body.apiPassphrase === "string" ? body.apiPassphrase : undefined,
+    });
+    res.json({
+      ok: true,
+      ...credentialsStatus(),
+      // Never echo secrets back; only confirm lengths.
+      apiKeyLength: saved.apiKey.length,
+      apiSecretLength: saved.apiSecret.length,
+      apiPassphraseLength: saved.apiPassphrase.length,
+    });
+  });
+
+  app.post("/api/sync", async (_req, res) => {
+    try {
+      const result = await sync.trigger("manual");
+      res.json({ ok: true, result });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   app.get("/api/stats", (_req, res) => {
@@ -287,7 +222,7 @@ async function main(): Promise<void> {
       res.json({
         pair,
         window,
-        source: "polymarket-twap",
+        source: "polymarket-rest",
         exportedAt: new Date().toISOString(),
         count: candles.length,
         candles,
@@ -335,7 +270,12 @@ async function main(): Promise<void> {
   });
 
   app.get("/api/pairs", (_req, res) => {
-    res.json({ pairs: PAIRS, windows: WINDOWS });
+    res.json({
+      pairs: PAIRS,
+      windows: WINDOWS,
+      restWindows: ["5m", "15m"],
+      aggregateWindows: ["30m", "1h", "4h", "1d"],
+    });
   });
 
   app.use(express.static(publicDir));
@@ -348,7 +288,7 @@ async function main(): Promise<void> {
     socket.send(
       JSON.stringify({
         type: "hello",
-        status: "connected",
+        status: "rest-hourly",
         stats: getStats(),
       } satisfies ClientMsg),
     );
@@ -361,13 +301,17 @@ async function main(): Promise<void> {
     socket.on("close", () => clients.delete(socket));
   });
 
-  // Live TWAP first — never wait on historical seed to start capturing.
-  feed.start();
-
   // HOST=0.0.0.0 for Railway/containers; override with HOST=:: for local IPv6 localhost.
   server.listen({ port: PORT, host: HOST, ipv6Only: false }, () => {
     console.log(`[datafeed] listening on http://${HOST}:${PORT}`);
+    console.log(
+      "[datafeed] Chainlink RTDS disconnected — Polymarket REST hourly sync",
+    );
   });
+
+  // No Chainlink RTDS — candles come from Polymarket REST only.
+  sync.start();
+  broadcast({ type: "status", status: "rest-hourly" });
 
   refreshMarketMetadata()
     .then(() => {
@@ -379,29 +323,14 @@ async function main(): Promise<void> {
     })
     .catch((err) => console.error("[meta] refresh failed", err));
 
-  seedIfNeeded()
-    .then(() => console.log("[seed] complete"))
-    .catch((err) => console.error("[seed] failed", err));
-
   setInterval(() => {
     refreshMarketMetadata().catch((err) =>
       console.error("[meta] refresh failed", err),
     );
   }, 5 * 60_000);
 
-  // Continuous safety net: catch gaps within ~one candle even if RTDS looks up.
-  setInterval(() => {
-    const lastTickAtMs = feed.getLastTickAtMs();
-    const tickAgeMs = lastTickAtMs ? Date.now() - lastTickAtMs : null;
-    void runGapFill("periodic").then(() => {
-      console.log(
-        `[gap] periodic ok (rtds age ${tickAgeMs == null ? "n/a" : `${Math.round(tickAgeMs / 1000)}s`})`,
-      );
-    });
-  }, GAP_FILL_INTERVAL_MS);
-
   const shutdown = () => {
-    feed.stop();
+    sync.stop();
     server.close(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);

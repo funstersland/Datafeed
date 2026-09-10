@@ -18,7 +18,7 @@
     <header class="top">
       <div class="brand-block">
         <p class="brand">Datafeed</p>
-        <p class="tagline" id="page-tagline">Polymarket Chainlink TWAP candles only</p>
+        <p class="tagline" id="page-tagline">Polymarket REST candles · hourly sync · no Chainlink RTDS</p>
       </div>
       <nav class="page-switcher" role="tablist" aria-label="Market page">
         <button
@@ -99,7 +99,10 @@
 
         <form id="settings-form" class="settings-body">
           <section class="settings-section" data-settings-panel="api">
-            <p class="settings-hint">Stored in this browser only. Used when a feed requires credentials.</p>
+            <p class="settings-hint">
+              Saved to this browser and to the Datafeed server. Used for Polymarket REST candle sync.
+              Optional env fallbacks: POLYMARKET_API_KEY / POLYMARKET_API_SECRET / POLYMARKET_API_PASSPHRASE.
+            </p>
             <label class="settings-field">
               <span>API key</span>
               <input id="settings-api-key" name="apiKey" type="password" autocomplete="off" placeholder="Enter API key" />
@@ -119,7 +122,8 @@
             <label class="settings-field">
               <span>Feed source</span>
               <select id="settings-crypto-feed" name="cryptoFeed">
-                <option value="polymarket-twap">Polymarket Chainlink TWAP (RTDS)</option>
+                <option value="polymarket-rest">Polymarket REST candles (hourly)</option>
+                <option value="polymarket-twap">Polymarket Chainlink TWAP (disabled)</option>
                 <option value="custom">Custom WebSocket URL</option>
               </select>
             </label>
@@ -176,7 +180,9 @@
         <div class="control-group" role="tablist" aria-label="Time window">
           <button class="chip active" data-window="5m">5M</button>
           <button class="chip" data-window="15m">15M</button>
+          <button class="chip" data-window="30m">30M</button>
           <button class="chip" data-window="1h">1H</button>
+          <button class="chip" data-window="4h">4H</button>
           <button class="chip" data-window="1d">Daily</button>
         </div>
         <div class="control-group download-group" aria-label="Download chart data">
@@ -241,7 +247,9 @@
             <div class="control-group" id="pnl-windows">
               <button class="chip active" type="button" data-pnl-window="5m">5M</button>
               <button class="chip" type="button" data-pnl-window="15m">15M</button>
+              <button class="chip" type="button" data-pnl-window="30m">30M</button>
               <button class="chip" type="button" data-pnl-window="1h">1H</button>
+              <button class="chip" type="button" data-pnl-window="4h">4H</button>
               <button class="chip" type="button" data-pnl-window="1d">Daily</button>
             </div>
           </div>

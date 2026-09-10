@@ -1,7 +1,7 @@
 import { PAIRS, WINDOW_SECONDS, type Pair, type Window } from "../config.js";
 import { getCandle, getCandles, upsertCandle, type CandleRow } from "../db.js";
 import {
-  fetchChainlinkCandles,
+  fetchPolymarketCandles,
   windowSupportsPolymarketCandles,
 } from "../polymarket/candlesApi.js";
 
@@ -44,7 +44,10 @@ export function findMissingOpenTimes(
 ): number[] {
   const now = Date.now();
   const fromMs = now - lookbackMs;
-  const expected = expectedOpenTimes(window, fromMs, now);
+  // Exclude the still-open bucket — Polymarket may not publish it yet.
+  const throughMs = alignOpenMs(now, window) - stepMs(window);
+  if (throughMs < alignOpenMs(fromMs, window)) return [];
+  const expected = expectedOpenTimes(window, fromMs, throughMs);
   if (!expected.length) return [];
 
   const existing = new Set(
@@ -70,7 +73,7 @@ function toRow(
     close: String(c.close),
     tickCount: 0,
     closed: Date.now() >= openTimeMs + durationMs ? 1 : 0,
-    source: "polymarket-chainlink-candles",
+    source: "polymarket-rest-candles",
     updatedAtMs: Date.now(),
   };
 }
@@ -86,14 +89,7 @@ export function importChainlinkCandlePreservingLive(
 ): "inserted" | "updated" | "skipped-live" {
   const row = toRow(pair, window, c);
   const existing = getCandle(pair, window, row.openTimeMs);
-  if (
-    existing &&
-    existing.closed === 0 &&
-    existing.tickCount > 0 &&
-    (existing.source.includes("rtds") || existing.source.includes("twap"))
-  ) {
-    return "skipped-live";
-  }
+  // REST-only mode: always upsert Polymarket official OHLC.
   upsertCandle(row);
   return existing ? "updated" : "inserted";
 }
@@ -118,7 +114,7 @@ export async function fillCandleGaps(
   const seen = new Set<number>();
 
   for (let page = 0; page < maxPages; page++) {
-    const candles = await fetchChainlinkCandles({
+    const candles = await fetchPolymarketCandles({
       pair,
       interval: window,
       endTimeMs,

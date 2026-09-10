@@ -1,4 +1,11 @@
-import { WINDOW_SECONDS, type Pair, type Window, WINDOWS } from "../config.js";
+import {
+  AGGREGATE_WINDOWS,
+  WINDOW_SECONDS,
+  type AggregateWindow,
+  type Pair,
+  type Window,
+  WINDOWS,
+} from "../config.js";
 import {
   getCandles,
   getLatestCandle,
@@ -37,7 +44,7 @@ function etDateLabel(ms: number): string {
   }).format(new Date(ms));
 }
 
-/** Candle open times: 5m/15m/1h use UTC unix alignment; daily uses ET midnight. */
+/** Candle open times: intraday uses UTC unix alignment; daily uses ET midnight. */
 export function candleOpenTimeMs(observedAtMs: number, window: Window): number {
   if (window === "1d") {
     const label = etDateLabel(observedAtMs);
@@ -61,10 +68,7 @@ export class CandleEngine {
   private readonly onGap: CandleGapHandler;
   private readonly open: Map<string, CandleRow> = new Map();
 
-  constructor(
-    onUpdate: CandleUpdateHandler,
-    onGap?: CandleGapHandler,
-  ) {
+  constructor(onUpdate: CandleUpdateHandler, onGap?: CandleGapHandler) {
     this.onUpdate = onUpdate;
     this.onGap = onGap ?? (() => undefined);
   }
@@ -85,9 +89,8 @@ export class CandleEngine {
     if (!current || current.openTimeMs !== openTimeMs) {
       if (current && current.openTimeMs < openTimeMs) {
         const step = WINDOW_SECONDS[window] * 1000;
-        const skippedBuckets = Math.floor(
-          (openTimeMs - current.openTimeMs) / step,
-        ) - 1;
+        const skippedBuckets =
+          Math.floor((openTimeMs - current.openTimeMs) / step) - 1;
         if (skippedBuckets > 0) {
           this.onGap({
             pair: tick.pair,
@@ -123,7 +126,9 @@ export class CandleEngine {
     }
 
     const preserveOpen =
-      current.source.includes("chainlink") || current.tickCount > 0;
+      current.source.includes("rest") ||
+      current.source.includes("chainlink") ||
+      current.tickCount > 0;
 
     const next: CandleRow = {
       ...current,
@@ -133,11 +138,13 @@ export class CandleEngine {
       close: tick.value,
       tickCount: current.tickCount + 1,
       closed: 0,
-      source: current.source.includes("chainlink")
-        ? "polymarket-chainlink-candles+rtds"
-        : current.source.includes("aggregate")
-          ? "polymarket-twap-aggregate+rtds"
-          : "polymarket-twap-rtds",
+      source: current.source.includes("rest")
+        ? "polymarket-rest-candles+rtds"
+        : current.source.includes("chainlink")
+          ? "polymarket-chainlink-candles+rtds"
+          : current.source.includes("aggregate")
+            ? "polymarket-twap-aggregate+rtds"
+            : "polymarket-twap-rtds",
       updatedAtMs: Date.now(),
     };
 
@@ -149,49 +156,58 @@ export class CandleEngine {
 }
 
 /**
- * Build 1h / 1d candles from Polymarket 5m TWAP candles already in the DB.
- * Polymarket does not publish 1h/1d Chainlink candle charts; we derive them
- * from the same TWAP series used for 5m/15m.
+ * Build 30m / 1h / 4h / 1d candles from Polymarket 5m REST candles in the DB.
+ * 15m is fetched directly from Polymarket REST (not aggregated here).
  */
 export function aggregateHigherTimeframesFromFiveMinute(pair: Pair): number {
   const five = getCandles(pair, "5m", 50_000);
   if (!five.length) return 0;
 
   let written = 0;
-  for (const window of ["1h", "1d"] as const) {
-    const buckets = new Map<number, CandleRow>();
-    for (const c of five) {
-      const openTimeMs = candleOpenTimeMs(c.openTimeMs, window);
-      const existing = buckets.get(openTimeMs);
-      if (!existing) {
-        buckets.set(openTimeMs, {
-          pair,
-          window,
-          openTimeMs,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          tickCount: c.tickCount,
-          closed: 1,
-          source: "polymarket-twap-aggregate-5m",
-          updatedAtMs: Date.now(),
-        });
-      } else {
-        existing.high = maxDecimal(existing.high, c.high);
-        existing.low = minDecimal(existing.low, c.low);
-        existing.close = c.close;
-        existing.tickCount += c.tickCount;
-        existing.updatedAtMs = Date.now();
-      }
-    }
+  for (const window of AGGREGATE_WINDOWS) {
+    written += writeAggregatedWindow(pair, window, five);
+  }
+  return written;
+}
 
-    const now = Date.now();
-    for (const row of buckets.values()) {
-      row.closed = row.openTimeMs + WINDOW_SECONDS[window] * 1000 <= now ? 1 : 0;
-      upsertCandle(row);
-      written += 1;
+function writeAggregatedWindow(
+  pair: Pair,
+  window: AggregateWindow,
+  five: CandleRow[],
+): number {
+  const buckets = new Map<number, CandleRow>();
+  for (const c of five) {
+    const openTimeMs = candleOpenTimeMs(c.openTimeMs, window);
+    const existing = buckets.get(openTimeMs);
+    if (!existing) {
+      buckets.set(openTimeMs, {
+        pair,
+        window,
+        openTimeMs,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        tickCount: c.tickCount,
+        closed: 1,
+        source: "polymarket-aggregate-5m",
+        updatedAtMs: Date.now(),
+      });
+    } else {
+      existing.high = maxDecimal(existing.high, c.high);
+      existing.low = minDecimal(existing.low, c.low);
+      existing.close = c.close;
+      existing.tickCount += c.tickCount;
+      existing.updatedAtMs = Date.now();
     }
+  }
+
+  const now = Date.now();
+  let written = 0;
+  for (const row of buckets.values()) {
+    row.closed = row.openTimeMs + WINDOW_SECONDS[window] * 1000 <= now ? 1 : 0;
+    upsertCandle(row);
+    written += 1;
   }
   return written;
 }
