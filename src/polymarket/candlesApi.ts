@@ -3,9 +3,11 @@ import {
   POLYMARKET,
   TWAP_LOOKBACK_SECONDS,
   type Pair,
+  type RestCandleWindow,
   type Window,
 } from "../config.js";
 import { getCandle, upsertCandle, type CandleRow } from "../db.js";
+import { polymarketAuthHeaders } from "./credentials.js";
 
 export type PolymarketCandle = {
   time: number; // unix seconds
@@ -19,8 +21,9 @@ async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
     headers: {
       Accept: "application/json",
-      "User-Agent": "Datafeed/1.0 (Polymarket-only)",
+      "User-Agent": "Datafeed/1.0 (Polymarket-REST)",
       Referer: `${POLYMARKET.site}/`,
+      ...polymarketAuthHeaders(),
     },
   });
   if (!res.ok) {
@@ -30,10 +33,10 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Official Polymarket Chainlink TWAP candles (5m / 15m only). */
-export async function fetchChainlinkCandles(options: {
+/** Official Polymarket candle REST (5m / 15m TWAP series used by crypto markets). */
+export async function fetchPolymarketCandles(options: {
   pair: Pair;
-  interval: "5m" | "15m";
+  interval: RestCandleWindow;
   endTimeMs?: number;
   twapEnabled?: boolean;
   twapLookbackSeconds?: number;
@@ -57,6 +60,9 @@ export async function fetchChainlinkCandles(options: {
   const data = await fetchJson<{ candles?: PolymarketCandle[] }>(url);
   return data.candles ?? [];
 }
+
+/** @deprecated Use fetchPolymarketCandles */
+export const fetchChainlinkCandles = fetchPolymarketCandles;
 
 /** Polymarket TWAP price history for one market window. */
 export async function fetchTwapPriceHistory(options: {
@@ -84,9 +90,17 @@ export async function fetchTwapPriceHistory(options: {
   return fetchJson(url);
 }
 
+function durationSeconds(window: RestCandleWindow): number {
+  return window === "5m" ? 300 : 900;
+}
+
+/**
+ * Page through Polymarket REST candles and upsert them.
+ * Skips overwriting a live open candle that already has ticks (legacy RTDS).
+ */
 export async function seedShortWindowHistory(
   pair: Pair,
-  window: "5m" | "15m",
+  window: RestCandleWindow,
   pages = 40,
 ): Promise<number> {
   let endTimeMs: number | undefined;
@@ -94,7 +108,7 @@ export async function seedShortWindowHistory(
   const seen = new Set<number>();
 
   for (let page = 0; page < pages; page++) {
-    const candles = await fetchChainlinkCandles({
+    const candles = await fetchPolymarketCandles({
       pair,
       interval: window,
       endTimeMs,
@@ -106,9 +120,8 @@ export async function seedShortWindowHistory(
       seen.add(c.time);
       const openTimeMs = c.time * 1000;
       const closed =
-        Date.now() >= (c.time + (window === "5m" ? 300 : 900)) * 1000 ? 1 : 0;
+        Date.now() >= (c.time + durationSeconds(window)) * 1000 ? 1 : 0;
       const existing = getCandle(pair, window, openTimeMs);
-      // Never wipe a live RTDS bucket that already has ticks.
       if (
         existing &&
         existing.closed === 0 &&
@@ -127,19 +140,22 @@ export async function seedShortWindowHistory(
         close: String(c.close),
         tickCount: 0,
         closed,
-        source: "polymarket-chainlink-candles",
+        source: "polymarket-rest-candles",
         updatedAtMs: Date.now(),
       };
       upsertCandle(row);
       imported += 1;
     }
 
-    const oldest = candles.reduce((min, c) => Math.min(min, c.time), candles[0].time);
+    const oldest = candles.reduce(
+      (min, c) => Math.min(min, c.time),
+      candles[0].time,
+    );
     const nextEnd = oldest * 1000 - 1;
     if (endTimeMs != null && nextEnd >= endTimeMs) break;
     endTimeMs = nextEnd;
     if (candles.length < 30) break;
-    await new Promise((r) => setTimeout(r, 120));
+    await new Promise((r) => setTimeout(r, 80));
   }
 
   return imported;
@@ -147,6 +163,6 @@ export async function seedShortWindowHistory(
 
 export function windowSupportsPolymarketCandles(
   window: Window,
-): window is "5m" | "15m" {
+): window is RestCandleWindow {
   return window === "5m" || window === "15m";
 }

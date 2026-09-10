@@ -1,7 +1,7 @@
 import { PAIRS, WINDOW_SECONDS, type Pair, type Window } from "../config.js";
 import { getCandle, getCandles, upsertCandle, type CandleRow } from "../db.js";
 import {
-  fetchChainlinkCandles,
+  fetchPolymarketCandles,
   windowSupportsPolymarketCandles,
 } from "../polymarket/candlesApi.js";
 
@@ -70,7 +70,7 @@ function toRow(
     close: String(c.close),
     tickCount: 0,
     closed: Date.now() >= openTimeMs + durationMs ? 1 : 0,
-    source: "polymarket-chainlink-candles",
+    source: "polymarket-rest-candles",
     updatedAtMs: Date.now(),
   };
 }
@@ -118,7 +118,7 @@ export async function fillCandleGaps(
   const seen = new Set<number>();
 
   for (let page = 0; page < maxPages; page++) {
-    const candles = await fetchChainlinkCandles({
+    const candles = await fetchPolymarketCandles({
       pair,
       interval: window,
       endTimeMs,

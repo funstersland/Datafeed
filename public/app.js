@@ -25,7 +25,7 @@ const DEFAULT_SETTINGS = {
   apiKey: "",
   apiSecret: "",
   apiPassphrase: "",
-  cryptoFeed: "polymarket-twap",
+  cryptoFeed: "polymarket-rest",
   cryptoFeedUrl: "",
   forexFeed: "none",
   forexFeedUrl: "",
@@ -1508,11 +1508,28 @@ function wireSettings() {
     if (ev.key === "Escape" && !$("settings-modal")?.hidden) closeSettings();
   });
 
-  $("settings-form")?.addEventListener("submit", (ev) => {
+  $("settings-form")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    saveSettings(readSettingsForm());
+    const next = readSettingsForm();
+    saveSettings(next);
     const note = $("settings-saved");
-    if (note) note.textContent = "Saved";
+    if (note) note.textContent = "Saving to server…";
+    try {
+      const res = await fetch("/api/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: next.apiKey,
+          apiSecret: next.apiSecret,
+          apiPassphrase: next.apiPassphrase,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (note) note.textContent = "Saved locally + server";
+    } catch (err) {
+      console.error(err);
+      if (note) note.textContent = "Saved locally (server sync failed)";
+    }
     applyFeedSettings();
   });
 
@@ -1526,7 +1543,7 @@ function applyFeedSettings() {
   if (s.cryptoFeed === "custom" && s.cryptoFeedUrl) {
     tag.textContent = `Custom crypto feed · ${s.cryptoFeedUrl}`;
   } else {
-    tag.textContent = "Polymarket Chainlink TWAP candles only";
+    tag.textContent = "Polymarket REST candles · hourly sync · no Chainlink RTDS";
   }
 }
 

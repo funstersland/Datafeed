@@ -66,12 +66,26 @@ function windowToSlugParts(window: Window): {
         seconds: 900,
         variant: "fifteen",
       };
+    case "30m":
+      return {
+        short: "30m",
+        series: "30m",
+        seconds: 1800,
+        variant: "thirty",
+      };
     case "1h":
       return {
         short: "1h",
         series: "hourly",
         seconds: 3600,
         variant: "hourly",
+      };
+    case "4h":
+      return {
+        short: "4h",
+        series: "4h",
+        seconds: 14_400,
+        variant: "fourhour",
       };
     case "1d":
       return {
@@ -196,8 +210,11 @@ export async function refreshMarketMetadata(): Promise<void> {
       let event: GammaEvent | null = null;
       if (window === "5m" || window === "15m") {
         event = await discoverShortWindow(pair, window);
-      } else {
+      } else if (window === "1h" || window === "1d") {
         event = await discoverHourlyOrDaily(pair, window);
+      } else {
+        // 30m / 4h are aggregated from 5m REST — no dedicated Polymarket market.
+        event = null;
       }
 
       const market = event?.markets?.[0];
@@ -205,8 +222,8 @@ export async function refreshMarketMetadata(): Promise<void> {
       const resolution =
         event?.resolutionSource ||
         market?.resolutionSource ||
-        (cfg?.twapEnabled
-          ? `https://data.chain.link/streams/${PAIR_META[pair].slugAsset}-usd-twap-60s-streams`
+        (window === "30m" || window === "4h"
+          ? "polymarket-aggregate-5m"
           : null);
 
       upsertMarketMeta({
@@ -218,7 +235,11 @@ export async function refreshMarketMetadata(): Promise<void> {
         marketSlug: event?.slug ?? null,
         title: event?.title ?? null,
         resolutionSource: resolution,
-        twapEnabled: cfg?.twapEnabled ? 1 : window === "5m" || window === "15m" ? 1 : 0,
+        twapEnabled: cfg?.twapEnabled
+          ? 1
+          : window === "5m" || window === "15m"
+            ? 1
+            : 0,
         twapLookbackSeconds:
           cfg?.twapLookbackSeconds ??
           (window === "5m" || window === "15m" ? TWAP_LOOKBACK_SECONDS : null),
