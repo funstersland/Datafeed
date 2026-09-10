@@ -302,6 +302,41 @@
               Cap martingale at 3 losses — stakes 1→2→4 then reset to base; any win also resets to base (no 4th double)
             </span>
           </label>
+          <div class="pnl-check-block">
+            <label class="pnl-check">
+              <input id="pnl-martingale-reset-break" type="checkbox" />
+              <span>
+                Martingale reset to base + break — after N consecutive losses, reset stake to base and
+                skip for M minutes (candle time), then resume
+              </span>
+            </label>
+            <div class="pnl-check-params">
+              <label class="pnl-param">
+                <span class="pnl-param-label">Losses</span>
+                <input
+                  id="pnl-reset-break-losses"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="losses"
+                  value="5"
+                  aria-label="Losses before reset and break"
+                />
+              </label>
+              <label class="pnl-param">
+                <span class="pnl-param-label">Minutes</span>
+                <input
+                  id="pnl-reset-break-minutes"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="minutes"
+                  value="30"
+                  aria-label="Break length in minutes"
+                />
+              </label>
+            </div>
+          </div>
           <label class="pnl-check">
             <input id="pnl-cont3-entry" type="checkbox" />
             <span>
